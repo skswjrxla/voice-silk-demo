@@ -245,14 +245,14 @@
     // 볼륨 -> 길이 (원하는 반응성 위해 약간 곡선)
     const v = Math.pow(clamp(vol,0,1), 0.65); // 작은 소리도 보이게
     const ampMax = H * 0.28;
-    const amp = (0.03 + v*0.97) * ampMax;
+    const amp = (0.10 + v*0.90) * ampMax; // 최소 길이 확 올려서 항상 보이게
 
     const y1 = midY - amp;
     const y2 = midY + amp;
 
     // base + highlight gradients (stronger)
-    const base = rainbowGradient(y1,y2, 0.85);
-    const hi   = rainbowGradient(y1,y2, 0.55);
+    const base = rainbowGradient(y1,y2, 1.00); // 더 진하게
+const hi   = rainbowGradient(y1,y2, 0.85); // 하이라이트도 강하게
 
     const widthPx = Math.max(1, Math.floor(colW * DPR));
     const spacing = strands <= 1 ? 0 : (widthPx / (strands-1));
@@ -268,7 +268,7 @@
       const t = strands<=1 ? 0.5 : i/(strands-1);
       // 가운데가 가장 진하게 (섬유 다발 느낌)
       const dens = Math.exp(-Math.pow((t-0.5)/0.33, 2));
-      const a = 0.22 + 0.28*dens; // 더 진하게
+      const a = 0.55 + 0.35*dens; // 섬유 자체를 확실히 보이게 (0.55~0.90)
       const x = i * spacing;
 
       wB.globalAlpha = a;
@@ -342,7 +342,7 @@
       // slight fade to avoid over-bright accumulation
       wB.save();
       wB.globalCompositeOperation = "destination-in";
-      wB.fillStyle = "rgba(255,255,255,0.985)";
+      wB.fillStyle = "rgba(255,255,255,0.995)";
       wB.fillRect(0,0,W,H);
       wB.restore();
 
@@ -363,9 +363,9 @@
 
     // composite wave over background
     ctx.save();
-    ctx.globalCompositeOperation = "screen";
-    ctx.drawImage(waveA, 0, 0);
-    ctx.restore();
+ctx.globalCompositeOperation = "source-over"; // 밝은 배경에서도 확실히 보이게
+ctx.drawImage(waveA, 0, 0);
+ctx.restore();
 
     // subtle sheen sweep (optional, cheap)
     const tt = (now*0.00014) % 1;
@@ -401,3 +401,4 @@
 </script>
 </body>
 </html>
+

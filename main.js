@@ -1,4 +1,4 @@
-(() => {
+(async () => {
   const ui = document.getElementById("ui");
   const btnStart = document.getElementById("btnStart");
   const statusEl = document.getElementById("status");
@@ -17,100 +17,128 @@
   window.addEventListener("error", (e) => showErr("JS Error:\n" + (e.error?.stack || e.message || e)));
   window.addEventListener("unhandledrejection", (e) => showErr("Promise Error:\n" + (e.reason?.stack || e.reason)));
 
-  // -------------------------
-  // Canvas overlay (transparent)
-  // -------------------------
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d", { alpha: true, desynchronized: true });
-  canvas.style.position = "fixed";
-  canvas.style.inset = "0";
-  canvas.style.zIndex = "2";
-  canvas.style.pointerEvents = "none";
-  stage.appendChild(canvas);
+  status("main.js 로드됨");
 
-  let W = 0, H = 0, DPR = 1;
-
-  function resize() {
-    DPR = Math.min(2, window.devicePixelRatio || 1);
-    W = Math.floor(window.innerWidth);
-    H = Math.floor(window.innerHeight);
-    canvas.width = Math.floor(W * DPR);
-    canvas.height = Math.floor(H * DPR);
-    canvas.style.width = W + "px";
-    canvas.style.height = H + "px";
-    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-
-    // 컬럼 수: 촘촘하지만 성능 고려 (모바일도 고려)
-    COLS = Math.max(240, Math.min(900, Math.floor(W * 1.2)));
-    ampF = new Float32Array(COLS);
-    seeds = new Float32Array(COLS);
-    for (let i = 0; i < COLS; i++) seeds[i] = fract(Math.sin((i + 1) * 43758.5453) * 143758.5453);
-
-    // 무지개(상단 빨강 → 하단 보라) 절대 그라데이션
-    grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0.00, "rgba(255,  40,  40, 1.00)"); // red
-    grad.addColorStop(0.16, "rgba(255, 140,  40, 1.00)"); // orange
-    grad.addColorStop(0.33, "rgba(255, 240,  80, 1.00)"); // yellow
-    grad.addColorStop(0.50, "rgba( 60, 255, 160, 1.00)"); // green-cyan
-    grad.addColorStop(0.66, "rgba( 60, 170, 255, 1.00)"); // blue
-    grad.addColorStop(0.82, "rgba(120,  80, 255, 1.00)"); // indigo
-    grad.addColorStop(1.00, "rgba(170,  60, 255, 1.00)"); // violet
+  if (!window.PIXI) {
+    showErr("PIXI 로드 실패: pixi.min.js CDN이 로딩되지 않았습니다.");
+    status("PIXI 로드 실패");
+    return;
   }
-  window.addEventListener("resize", resize, { passive: true });
 
   // -------------------------
-  // Audio
+  // Pixi v8 init
+  // -------------------------
+  let app;
+  try {
+    app = new PIXI.Application();
+    await app.init({
+      resizeTo: window,
+      backgroundAlpha: 0,
+      antialias: true,
+      autoDensity: true,
+      resolution: Math.min(1.5, window.devicePixelRatio || 1),
+      powerPreference: "high-performance",
+    });
+
+    const canvas = app.renderer?.canvas || app.renderer?.view || null;
+    if (!canvas) throw new Error("Renderer canvas/view not found");
+    stage.appendChild(canvas);
+  } catch (e) {
+    showErr("PIXI 초기화 실패:\n" + (e.stack || e));
+    status("PIXI 실패");
+    return;
+  }
+
+  // WebGL2 여부 확인 (여기에 따라 GLSL1/3 선택)
+  const gl = app.renderer?.gl;
+  const isWebGL2 = (typeof WebGL2RenderingContext !== "undefined") && (gl instanceof WebGL2RenderingContext);
+
+  // -------------------------
+  // Fullscreen sprite (filter target)
+  // -------------------------
+  const screen = new PIXI.Sprite(PIXI.Texture.WHITE);
+  screen.width = app.renderer.width;
+  screen.height = app.renderer.height;
+  app.stage.addChild(screen);
+
+  // -------------------------
+  // Audio RMS
   // -------------------------
   let audioCtx = null, analyser = null, stream = null, data = null;
   let started = false;
   let paused = false;
   let smVol = 0;
 
-  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp = (x,a,b) => Math.max(a, Math.min(b, x));
+  const lerp  = (a,b,t) => a + (b-a)*t;
 
-  async function startMic() {
+  async function startMic(){
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     await audioCtx.resume();
+
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
     });
+
     const src = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.55;
     src.connect(analyser);
+
     data = new Uint8Array(analyser.fftSize);
   }
 
-  function rms() {
-    if (!analyser || !data) return 0;
+  function rms(){
+    if(!analyser || !data) return 0;
     analyser.getByteTimeDomainData(data);
     let sum = 0;
-    for (let i = 0; i < data.length; i++) {
-      const v = (data[i] - 128) / 128;
-      sum += v * v;
+    for(let i=0;i<data.length;i++){
+      const v = (data[i]-128)/128;
+      sum += v*v;
     }
-    return clamp(Math.sqrt(sum / data.length), 0, 1);
+    return clamp(Math.sqrt(sum/data.length), 0, 1);
   }
 
   // -------------------------
-  // "밀어서 전달" 파동 버퍼
+  // Amp texture (1px canvas -> texture)
   // -------------------------
-  let COLS = 600;
-  let ampF = new Float32Array(COLS);
-  let seeds = new Float32Array(COLS);
-  let grad = null;
+  const COLS = 1024;
 
-  // 튜닝(원하면 여기만 만지면 됨)
-  const PUSH  = 0.93;    // 클수록 "밀림" 강함
-  const DECAY = 0.986;   // 클수록 잔상 길음
-  const RATE  = 220;     // 클수록 전달 빠름
+  const ampCanvas = document.createElement("canvas");
+  ampCanvas.width = COLS;
+  ampCanvas.height = 1;
+  const ampCtx = ampCanvas.getContext("2d");
 
-  function propagateAmp(inputAmp01, steps) {
-    for (let s = 0; s < steps; s++) {
-      for (let i = COLS - 1; i >= 1; i--) {
-        ampF[i] = ampF[i] * DECAY + ampF[i - 1] * PUSH;
+  const img = ampCtx.createImageData(COLS, 1);
+  const px  = img.data;
+  for(let i=0;i<COLS;i++){
+    px[i*4+0]=0; px[i*4+1]=0; px[i*4+2]=0; px[i*4+3]=255;
+  }
+  ampCtx.putImageData(img, 0, 0);
+
+  const ampTex = PIXI.Texture.from(ampCanvas);
+
+  function flushAmpTexture(){
+    ampCtx.putImageData(img, 0, 0);
+    ampTex.source.update();
+  }
+
+  // -------------------------
+  // ✅ "선이 선을 밀어서 전달" 전파 버퍼
+  // -------------------------
+  const ampF = new Float32Array(COLS);
+
+  // 튜닝값
+  const PUSH  = 0.93;   // 밀림 강도
+  const DECAY = 0.986;  // 잔상
+  const RATE  = 220;    // 전달 속도(초당 스텝)
+  const AMP_SCALE = 1.85; // 진폭 크게
+
+  function propagateAmp(inputAmp01, steps){
+    for(let s=0; s<steps; s++){
+      for(let i=COLS-1; i>=1; i--){
+        ampF[i] = ampF[i]*DECAY + ampF[i-1]*PUSH;
         if (ampF[i] > 1) ampF[i] = 1;
         if (ampF[i] < 0) ampF[i] = 0;
       }
@@ -118,169 +146,368 @@
     }
   }
 
-  // 무음=거의 안 보임 / 조금만 소리나도 예민하게
-  function mapVolToAmp01(v) {
-    const SILENT = 0.0022;  // 거의 무음 컷
-    const KNEE   = 0.0042;  // 반응 시작
+  // 무음은 거의 안 보이고, 조금만 말해도 예민하게 반응
+  function mapVolToAmp01(vRaw){
+    const SILENT = 0.0022;
+    const KNEE   = 0.0042;
+    if (vRaw <= SILENT) return 0.0;
 
-    if (v <= SILENT) return 0.0;
-
-    let x = (v - KNEE) / (1 - KNEE);
+    let x = (vRaw - KNEE) / (1 - KNEE);
     x = clamp(x, 0, 1);
 
-    const gain  = 20.0;
-    const gamma = 0.15; // 더 예민
+    const gain  = 22.0;
+    const gamma = 0.14;
 
     const y = Math.pow(clamp(x * gain, 0, 1), gamma);
     return clamp(y, 0, 1);
   }
 
-  function fract(x) { return x - Math.floor(x); }
-
   // -------------------------
-  // Render (silk fibers)
+  // ✅ Shader sources (GLSL1 + GLSL3)
   // -------------------------
-  function render(dt) {
-    ctx.clearRect(0, 0, W, H);
+  // 공통 함수/로직은 최대한 동일하게 유지
 
-    // 완전 무음이면 "거의 안 보이게" (원하면 0.0으로 바꾸면 완전 숨김)
-    // 여기서는 아주 미세하게만 남김:
-    const globalFloor = 0.000; // 완전 숨기려면 0.0 유지
+  const VERT_GLSL1 = `
+    attribute vec2 aPosition;
+    varying vec2 vTextureCoord;
 
-    // 중앙선
-    const midY = Math.floor(H * 0.54);
+    uniform vec4 uInputSize;
+    uniform vec4 uOutputFrame;
+    uniform vec4 uOutputTexture;
 
-    // 컬럼 간격
-    const dx = W / (COLS - 1);
+    vec4 filterVertexPosition( void )
+    {
+      vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+      position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+      position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+      return vec4(position, 0.0, 1.0);
+    }
 
-    // 라인/섬유 레이어: 기본 + 하이라이트 2패스 (보석 느낌)
-    // 1) 본체
-    ctx.globalCompositeOperation = "source-over";
-    ctx.strokeStyle = grad;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    vec2 filterTextureCoord( void )
+    {
+      return aPosition * (uOutputFrame.zw * uInputSize.zw);
+    }
 
-    // 가늘고 촘촘한 섬유: 성능 위해 lineWidth는 1~1.2 선에서
-    ctx.lineWidth = 1.0;
-    ctx.globalAlpha = 0.95;
+    void main(void)
+    {
+      gl_Position = filterVertexPosition();
+      vTextureCoord = filterTextureCoord();
+    }
+  `;
 
-    // 2) 하이라이트 (screen)
-    // (두 번째 패스에서 적용)
+  const FRAG_GLSL1 = `
+    precision highp float;
+    varying vec2 vTextureCoord;
 
-    // 섬유 개수(컬럼당)
-    const STRANDS = 3; // 2~4 (성능/미감)
-    const maxBendPx = 10; // 미세 곡률(요동 X)
+    uniform sampler2D uAmpTex;
+    uniform float uCols;
+    uniform float uMidY;
 
-    // 본체 패스
-    for (let i = 0; i < COLS; i++) {
-      const a = Math.max(globalFloor, ampF[i]);
-      if (a <= 0.0005) continue;
+    float hash11(float p){
+      p = fract(p * 0.1031);
+      p *= p + 33.33;
+      p *= p + p;
+      return fract(p);
+    }
 
-      const x0 = i * dx;
+    vec3 hsv2rgb(vec3 c){
+      vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+      vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+      return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
 
-      // 진폭(픽셀): 크게
-      const A = a * (H * 0.34); // 0.34가 진폭 크기. 더 키우려면 0.40까지.
+    float gauss(float x, float s){
+      return exp(-(x*x)/(2.0*s*s));
+    }
 
-      // 곡률은 "정적" + 아주 미세(흐름/요동 없음)
-      const sd = seeds[i];
-      const bend = (sd - 0.5) * maxBendPx;
+    void main(){
+      vec2 uv = vTextureCoord;
 
-      // 컬럼마다 알파를 조금 바꿔서 실크 질감
-      const alphaCol = 0.65 + 0.35 * (0.5 + 0.5 * Math.sin((i * 0.12) + sd * 6.28));
-      ctx.globalAlpha = 0.78 * alphaCol;
+      // 상단 red(0.0) -> 하단 violet(0.75)
+      float hue = mix(0.0, 0.75, uv.y);
 
-      for (let k = 0; k < STRANDS; k++) {
-        const kk = k - (STRANDS - 1) * 0.5;
-        const off = kk * 1.8; // 머리카락처럼 가늘게
+      float cols = uCols;
+      float fx = uv.x * cols;
+      float col = floor(fx);
+      float inCol = fract(fx);
 
-        // 세로선이지만, 살짝 휘게(3점 polyline)
-        const y1 = midY - A;
-        const y2 = midY + A;
+      // ✅ 화면 x에 고정 샘플링 (배경/천이 안 움직임)
+      float s = (col + 0.5) / cols;
+      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r;
 
-        // 3점으로 미세 곡률
-        const xm = x0 + off + bend;
-        const ym = midY;
+      // ✅ 진폭 크게
+      float A = max(amp * ${AMP_SCALE.toFixed(2)}, 0.0008);
 
-        ctx.beginPath();
-        ctx.moveTo(x0 + off, y1);
-        ctx.quadraticCurveTo(xm, ym, x0 + off, y2);
-        ctx.stroke();
+      float mid = uMidY;
+      float dy = abs(uv.y - mid);
+
+      // 밴드 두께
+      float band = smoothstep(A, A - 0.014, dy);
+
+      // 무음은 거의 안보이게
+      float gate = smoothstep(0.002, 0.010, amp);
+
+      // 실 결 고정 + 미세 곡률(흐름/요동 X)
+      float seed = hash11(col + 7.13);
+      float bendBase = (seed - 0.5) * 0.020;
+      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
+      float bend = (bendBase + bendWave) * (0.25 + 1.2*A);
+
+      float x = (inCol - 0.5) + bend;
+
+      // 섬유 코어/헤일로/스펙
+      float core = 0.0;
+      float halo = 0.0;
+      float spec = 0.0;
+
+      for(int k=0;k<6;k++){
+        float fk = float(k);
+        float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
+
+        float d = x - off;
+
+        core += gauss(d, 0.030);
+        halo += gauss(d, 0.090);
+
+        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
+        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
+        spec += s1 * mix(0.95, 1.35, streak);
       }
+
+      core = clamp(core, 0.0, 1.0);
+      halo = clamp(halo, 0.0, 1.0);
+      spec = clamp(spec, 0.0, 1.0);
+
+      // 더 쨍하게(보석 느낌)
+      vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0));
+      base = pow(base, vec3(0.58));
+      base *= 1.55;
+
+      vec3 ice  = vec3(0.92, 0.99, 1.00);
+      vec3 pink = vec3(1.00, 0.86, 0.98);
+
+      float alpha = band * (0.20 + 0.80*gate);
+
+      vec3 rgb = base * (0.76*core + 0.30*halo);
+      rgb += ice  * (1.35 * spec);
+      rgb += pink * (0.10 * halo);
+
+      rgb = clamp(rgb, 0.0, 1.6);
+
+      float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
+      gl_FragColor = vec4(rgb, a);
+    }
+  `;
+
+  const VERT_GLSL3 = `#version 300 es
+    precision highp float;
+
+    in vec2 aPosition;
+    out vec2 vTextureCoord;
+
+    uniform vec4 uInputSize;
+    uniform vec4 uOutputFrame;
+    uniform vec4 uOutputTexture;
+
+    vec4 filterVertexPosition( void )
+    {
+      vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+      position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+      position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+      return vec4(position, 0.0, 1.0);
     }
 
-    // 하이라이트 패스 (보석 같은 "쨍함")
-    ctx.globalCompositeOperation = "screen";
-    ctx.lineWidth = 0.85;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = "rgba(255,255,255,0.70)";
-
-    for (let i = 0; i < COLS; i++) {
-      const a = ampF[i];
-      if (a <= 0.003) continue;
-
-      const x0 = i * dx;
-      const A = a * (H * 0.34);
-
-      const sd = seeds[i];
-      const bend = (sd - 0.5) * 8;
-
-      // 큰 진폭일수록 하이라이트 더 강하게
-      const hl = clamp((a - 0.02) * 8.0, 0, 1);
-      if (hl <= 0) continue;
-
-      ctx.globalAlpha = 0.10 + 0.45 * hl;
-      ctx.strokeStyle = "rgba(255,255,255,0.95)";
-
-      // 중앙 근처 가는 하이라이트 1가닥
-      ctx.beginPath();
-      const y1 = midY - A;
-      const y2 = midY + A;
-      ctx.moveTo(x0, y1);
-      ctx.quadraticCurveTo(x0 + bend, midY, x0, y2);
-      ctx.stroke();
+    vec2 filterTextureCoord( void )
+    {
+      return aPosition * (uOutputFrame.zw * uInputSize.zw);
     }
 
-    // 상태 텍스트
-    if (pill) {
-      pill.textContent = paused ? "Paused · tap to resume" : "Running · tap to pause";
+    void main(void)
+    {
+      gl_Position = filterVertexPosition();
+      vTextureCoord = filterTextureCoord();
     }
+  `;
+
+  const FRAG_GLSL3 = `#version 300 es
+    precision highp float;
+
+    in vec2 vTextureCoord;
+    uniform sampler2D uAmpTex;
+    uniform float uCols;
+    uniform float uMidY;
+
+    out vec4 FragColor;
+
+    float hash11(float p){
+      p = fract(p * 0.1031);
+      p *= p + 33.33;
+      p *= p + p;
+      return fract(p);
+    }
+
+    vec3 hsv2rgb(vec3 c){
+      vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+      vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+      return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
+
+    float gauss(float x, float s){
+      return exp(-(x*x)/(2.0*s*s));
+    }
+
+    void main(){
+      vec2 uv = vTextureCoord;
+
+      float hue = mix(0.0, 0.75, uv.y);
+
+      float cols = uCols;
+      float fx = uv.x * cols;
+      float col = floor(fx);
+      float inCol = fract(fx);
+
+      float s = (col + 0.5) / cols;
+      float amp = texture(uAmpTex, vec2(s, 0.5)).r;
+
+      float A = max(amp * ${AMP_SCALE.toFixed(2)}, 0.0008);
+
+      float mid = uMidY;
+      float dy = abs(uv.y - mid);
+
+      float band = smoothstep(A, A - 0.014, dy);
+      float gate = smoothstep(0.002, 0.010, amp);
+
+      float seed = hash11(col + 7.13);
+      float bendBase = (seed - 0.5) * 0.020;
+      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
+      float bend = (bendBase + bendWave) * (0.25 + 1.2*A);
+
+      float x = (inCol - 0.5) + bend;
+
+      float core = 0.0;
+      float halo = 0.0;
+      float spec = 0.0;
+
+      for(int k=0;k<6;k++){
+        float fk = float(k);
+        float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
+        float d = x - off;
+
+        core += gauss(d, 0.030);
+        halo += gauss(d, 0.090);
+
+        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
+        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
+        spec += s1 * mix(0.95, 1.35, streak);
+      }
+
+      core = clamp(core, 0.0, 1.0);
+      halo = clamp(halo, 0.0, 1.0);
+      spec = clamp(spec, 0.0, 1.0);
+
+      vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0));
+      base = pow(base, vec3(0.58));
+      base *= 1.55;
+
+      vec3 ice  = vec3(0.92, 0.99, 1.00);
+      vec3 pink = vec3(1.00, 0.86, 0.98);
+
+      float alpha = band * (0.20 + 0.80*gate);
+
+      vec3 rgb = base * (0.76*core + 0.30*halo);
+      rgb += ice  * (1.35 * spec);
+      rgb += pink * (0.10 * halo);
+
+      rgb = clamp(rgb, 0.0, 1.6);
+      float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
+
+      FragColor = vec4(rgb, a);
+    }
+  `;
+
+  // -------------------------
+  // Build filter (choose shader version)
+  // -------------------------
+  let filter;
+  try {
+    const vertex = isWebGL2 ? VERT_GLSL3 : VERT_GLSL1;
+    const fragment = isWebGL2 ? FRAG_GLSL3 : FRAG_GLSL1;
+
+    const glProgram = (PIXI.GlProgram?.from)
+      ? PIXI.GlProgram.from({ vertex, fragment })
+      : new PIXI.GlProgram({ vertex, fragment });
+
+    const makeFilter = (ampResource) => new PIXI.Filter({
+      glProgram,
+      resources: {
+        uAmpTex: ampResource,
+        silkUniforms: {
+          uCols: { value: COLS, type: "f32" },
+          uMidY: { value: 0.54, type: "f32" },
+        }
+      }
+    });
+
+    try { filter = makeFilter(ampTex); }
+    catch { filter = makeFilter(ampTex.source); }
+
+    screen.filters = [filter];
+  } catch (e) {
+    showErr("필터 생성/컴파일 실패:\n" + (e.stack || e));
+    status("필터 실패");
+    return;
   }
 
+  function onResize(){
+    screen.width = app.renderer.width;
+    screen.height = app.renderer.height;
+  }
+  window.addEventListener("resize", onResize, { passive:true });
+
   // -------------------------
-  // Loop
+  // Ticker
   // -------------------------
   let last = performance.now();
 
-  function tick() {
+  app.ticker.add(() => {
     const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const dt = Math.min(0.05, (now - last)/1000);
     last = now;
 
-    if (!started) {
-      if (pill) pill.textContent = "Press Start";
-      requestAnimationFrame(tick);
+    if(!started){
+      if (pill) pill.textContent = `Press Start (WebGL${isWebGL2?2:1})`;
       return;
     }
 
-    if (!paused) {
-      const v = rms();
-      smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
+    if (pill) pill.textContent = paused ? "Paused · tap to resume" : "Running · tap to pause";
+    if (paused) return;
 
-      const steps = Math.max(1, Math.floor(dt * RATE));
-      const amp01 = mapVolToAmp01(smVol);
+    const v = rms();
+    smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
-      propagateAmp(amp01, steps);
+    // 전파 (밀어서 전달)
+    const steps = Math.max(1, Math.floor(dt * RATE));
+    const amp01 = mapVolToAmp01(smVol);
+    propagateAmp(amp01, steps);
+
+    // ampF -> 1px texture
+    for(let i=0;i<COLS;i++){
+      const vv = Math.round(clamp(ampF[i], 0, 1) * 255);
+      px[i*4 + 0] = vv;
+      px[i*4 + 3] = 255;
     }
+    flushAmpTexture();
 
-    render(dt);
-    requestAnimationFrame(tick);
-  }
+    // uniforms update
+    const U = filter.resources.silkUniforms.uniforms;
+    U.uCols = COLS;
+  });
 
   // -------------------------
   // Controls
   // -------------------------
-  async function doStart() {
-    if (started) return;
+  async function doStart(){
+    if(started) return;
     status("마이크 시작 중…");
     try {
       await startMic();
@@ -294,23 +521,16 @@
     }
   }
 
-  if (btnStart) {
-    btnStart.onclick = async (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      await doStart();
-    };
-  }
+  btnStart.onclick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await doStart();
+  };
 
-  // 화면 터치(클릭)로 Pause/Resume
   window.addEventListener("pointerdown", () => {
-    if (!started) return;
-    if (ui && ui.style.display !== "none") return;
+    if(!started) return;
+    if(ui && ui.style.display !== "none") return;
     paused = !paused;
-  }, { passive: true });
+  }, { passive:true });
 
-  // init
-  resize();
-  status("대기 중");
-  requestAnimationFrame(tick);
 })();

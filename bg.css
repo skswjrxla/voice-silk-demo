@@ -1,0 +1,44 @@
+/* iPhone-ish liquid glass background */
+#liquidBg{
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+
+  background:
+    radial-gradient(900px 600px at 18% 22%, rgba(120,160,255,.55), rgba(255,255,255,0) 60%),
+    radial-gradient(800px 520px at 78% 28%, rgba(255,120,200,.38), rgba(255,255,255,0) 62%),
+    radial-gradient(900px 700px at 70% 78%, rgba(120,255,220,.34), rgba(255,255,255,0) 62%),
+    radial-gradient(1000px 800px at 22% 78%, rgba(170,140,255,.32), rgba(255,255,255,0) 65%),
+    linear-gradient(180deg, #dbe7ff 0%, #cfd9ff 30%, #c7d6ff 60%, #d6e6ff 100%);
+
+  filter: saturate(1.25) contrast(1.12);
+}
+
+#liquidBg::before{
+  content:"";
+  position:absolute;
+  inset:-30%;
+
+  background:
+    radial-gradient(closest-side at 30% 40%, rgba(255,255,255,.18), rgba(255,255,255,0) 60%),
+    radial-gradient(closest-side at 70% 60%, rgba(255,255,255,.14), rgba(255,255,255,0) 62%),
+    repeating-radial-gradient(circle at 45% 55%,
+      rgba(255,255,255,.045) 0px,
+      rgba(255,255,255,0) 22px,
+      rgba(255,255,255,.035) 44px);
+
+  mix-blend-mode: soft-light;
+  opacity:.85;
+  filter: url(#lgDistort);
+}
+
+/* micro grain */
+#liquidBg::after{
+  content:"";
+  position:absolute;
+  inset:0;
+  background: rgba(255,255,255,.08);
+  mix-blend-mode: overlay;
+  filter: url(#lgNoise);
+  opacity:.55;
+}

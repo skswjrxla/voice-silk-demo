@@ -26,48 +26,32 @@
   }
 
   // -------------------------
-  // ✅ Pixi v8 안전 초기화
+  // Pixi v8 safe init
   // -------------------------
   let app;
   try {
     app = new PIXI.Application();
+    await app.init({
+      resizeTo: window,
+      backgroundAlpha: 0,
+      antialias: true,
+      autoDensity: true,
+      resolution: Math.min(1.5, window.devicePixelRatio || 1),
+      powerPreference: "high-performance",
+    });
 
-    if (typeof app.init === "function") {
-      await app.init({
-        resizeTo: window,
-        backgroundAlpha: 0,
-        antialias: true,
-        autoDensity: true,
-        resolution: Math.min(1.5, window.devicePixelRatio || 1),
-        powerPreference: "high-performance",
-      });
-    } else {
-      // 혹시 구버전/다른 빌드가 섞였을 때 최소 동작 fallback
-      // (v8에서는 init가 있어야 정상)
-      showErr("PIXI.Application.init()가 없습니다. pixi 버전/빌드가 섞였을 가능성.");
-      status("PIXI init 없음");
-      return;
-    }
-
-    // ✅ 여기서 renderer가 없으면 이후 app.canvas 접근 시 바로 터짐
     if (!app.renderer) {
-      showErr("Renderer 생성 실패: WebGL/WebGPU 초기화가 안 됐습니다(드라이버/브라우저 문제 가능).");
+      showErr("Renderer 생성 실패: WebGL/WebGPU 초기화가 안 됐습니다.");
       status("Renderer 실패");
       return;
     }
 
-    // ✅ 절대 app.canvas를 읽지 말고 renderer에서 캔버스를 꺼낸다 (핵심)
-    const canvas =
-      app.renderer?.canvas ||
-      app.renderer?.view ||
-      null;
-
+    const canvas = app.renderer?.canvas || app.renderer?.view || null;
     if (!canvas) {
       showErr("Renderer canvas/view를 찾지 못했습니다.");
       status("Canvas 없음");
       return;
     }
-
     stage.appendChild(canvas);
   } catch (e) {
     showErr("PIXI 초기화 실패:\n" + (e.stack || e));
@@ -141,23 +125,26 @@
 
   const ampTex = PIXI.Texture.from(ampCanvas);
 
+  // ✅ "화면은 고정" + "파동이 왼→오로 이동"은 지금 구조 그대로(새 컬럼이 들어오며 이동)
   let headOffset = 0;
   let scrollPx = 0;
-  const speedPx = 520;
+  const speedPx = 560; // 조금 더 시원하게 이동
 
+  // ✅ 3) 진폭 더 크게 (maxAmp ↑)
   function mapVolToAmp01(vRaw){
     const SILENT = 0.010;
     const KNEE   = 0.016;
 
-    const minAmp = 0.010; // 무음일 때 “매우 작게”
-    const maxAmp = 0.38;
+    const minAmp = 0.010; // 무음일 때 매우 작게
+    const maxAmp = 0.62;  // ✅ 크게 (0.55~0.70 추천)
 
     if (vRaw <= SILENT) return minAmp;
 
     const x = clamp((vRaw - KNEE) / (1 - KNEE), 0, 1);
 
-    const gain  = 11.0;  // 더 예민: 13~15
-    const gamma = 0.20;  // 더 예민: 0.16~0.22
+    // 민감도 (필요시 gain 13~15)
+    const gain  = 11.0;
+    const gamma = 0.20;
 
     const y = Math.pow(clamp(x * gain, 0, 1), gamma);
     return minAmp + y * (maxAmp - minAmp);
@@ -240,6 +227,7 @@
     void main(){
       vec2 uv = vTextureCoord;
 
+      // absolute rainbow: top red -> bottom violet
       float hue = mix(0.0, 0.75, uv.y);
 
       float cols = uCols;
@@ -250,8 +238,10 @@
       float idx = mod(col + uHeadOffset, cols);
       float s = (idx + 0.5) / cols;
 
-      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r;
-      float A = max(amp * 0.45, 0.0025);
+      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r; // 0..1
+
+      // ✅ 3) 진폭 더 크게 (shader scale ↑)
+      float A = max(amp * 0.78, 0.0025);
 
       float mid = uMidY;
       float dy = abs(uv.y - mid);
@@ -259,33 +249,40 @@
       float band = smoothstep(A, A - 0.004, dy);
       float silentGate = smoothstep(0.012, 0.020, amp);
 
+      // ✅ 1) 화면이 '흐르는' 느낌 제거: 시간에 따른 bendTime 제거
       float seed = hash11(idx + 7.13);
       float bendBase = (seed - 0.5) * 0.020;
-      float bendWave = sin((uv.y * 20.0) + seed * 6.283) * 0.018;
-      float bendTime = sin(uTime * 0.35 + seed * 9.0) * 0.006;
+      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010; // 미세 곡률만
+      float bendTime = 0.0; // 고정 (요동/흐름 제거)
       float bend = (bendBase + bendWave + bendTime) * (0.25 + 1.2*A);
 
       float x = (inCol - 0.5) + bend;
 
+      // ✅ 4) "실(섬유)" 강화: 가닥 수↑, 코어 얇게, 하이라이트 날카롭게
       float core = 0.0;
       float halo = 0.0;
       float spec = 0.0;
 
-      for(int k=0;k<3;k++){
+      for(int k=0;k<6;k++){
         float fk = float(k);
-        float off = (hash11(idx*3.1 + fk*12.7) - 0.5) * 0.18;
 
-        float wCore = 0.050;
-        float wHalo = 0.120;
+        // 촘촘한 실 뭉치
+        float off = (hash11(idx*3.1 + fk*12.7) - 0.5) * 0.12;
+
+        float wCore = 0.032; // 더 얇은 코어(머리카락/실)
+        float wHalo = 0.095; // 은은한 글로우
 
         float d = x - off;
 
         float c = gauss(d, wCore);
         float h = gauss(d, wHalo);
 
-        float s1 = pow(clamp(1.0 - abs(d)/0.07, 0.0, 1.0), 12.0);
-        float streak = 0.55 + 0.45*sin(uv.y*70.0 + seed*9.0 + fk*4.0);
-        s1 *= mix(0.85, 1.25, streak);
+        // sharper anisotropic highlight
+        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
+
+        // "실" 특유의 미세 결: y축 따라 살짝 변조(정적, 요동 아님)
+        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
+        s1 *= mix(0.95, 1.35, streak);
 
         core += c;
         halo += h;
@@ -296,22 +293,30 @@
       halo = clamp(halo, 0.0, 1.0);
       spec = clamp(spec, 0.0, 1.0);
 
-      vec3 base = hsv2rgb(vec3(hue, 0.95, 1.0));
-      base = pow(base, vec3(0.78));
+      // ✅ 2) 색 더 선명/진하게 (배경과 분리)
+      vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0)); // 채도 100%
+      base = pow(base, vec3(0.60));             // 더 펀치
+      base *= 1.35;                             // 밝기 부스트
 
-      vec3 ice = vec3(0.90, 0.98, 1.00);
+      // gem/ice highlights
+      vec3 ice  = vec3(0.90, 0.98, 1.00);
       vec3 pink = vec3(1.00, 0.86, 0.98);
 
-      float alpha = band * (0.14 + 0.86 * silentGate);
+      float alpha = band * (0.18 + 0.82 * silentGate);
 
-      vec3 colRGB = base * (0.55*core + 0.35*halo);
-      colRGB += ice  * (0.95 * spec);
-      colRGB += pink * (0.12 * halo);
+      // core/halo + spec composition (더 선명)
+      vec3 colRGB = base * (0.72*core + 0.32*halo);
+      colRGB += ice  * (1.15 * spec);
+      colRGB += pink * (0.10 * halo);
 
-      float edge = smoothstep(0.60, 0.15, abs(inCol - 0.5));
-      colRGB *= (0.90 + 0.10*edge);
+      // edge shaping in each column
+      float edge = smoothstep(0.62, 0.10, abs(inCol - 0.5));
+      colRGB *= (0.86 + 0.14*edge);
 
-      float a = alpha * clamp(0.55*core + 0.45*halo + 0.65*spec, 0.0, 1.0);
+      // clamp so it stays punchy but not blown out
+      colRGB = clamp(colRGB, 0.0, 1.35);
+
+      float a = alpha * clamp(0.75*core + 0.45*halo + 0.85*spec, 0.0, 1.0);
       a *= band;
 
       gl_FragColor = vec4(colRGB, a);
@@ -324,7 +329,6 @@
       ? PIXI.GlProgram.from({ vertex, fragment })
       : new PIXI.GlProgram({ vertex, fragment });
 
-    // uAmpTex 리소스는 빌드/버전 차이로 Texture vs TextureSource가 다르게 요구될 수 있어서 2단계 방어
     const makeFilter = (ampResource) => new PIXI.Filter({
       glProgram,
       resources: {
@@ -339,11 +343,8 @@
       }
     });
 
-    try {
-      filter = makeFilter(ampTex);          // 1) Texture로 시도
-    } catch {
-      filter = makeFilter(ampTex.source);   // 2) 안 되면 Source로
-    }
+    try { filter = makeFilter(ampTex); }
+    catch { filter = makeFilter(ampTex.source); }
 
     screen.filters = [filter];
   } catch (e) {
@@ -360,6 +361,7 @@
   }
   window.addEventListener("resize", onResize, { passive:true });
 
+  // ✅ 1) 화면은 고정: uTime은 흐름(bendTime)을 0으로 했으니 이제 “이동”은 오직 컬럼 진행만
   let last = performance.now();
 
   app.ticker.add(() => {
@@ -377,7 +379,10 @@
     smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
     const U = filter.resources.silkUniforms.uniforms;
+    // uTime은 화면 흐름에 쓰지 않지만, 실 결(streak)의 정적 패턴엔 영향 없음.
+    // 안전하게 계속 증가시켜도 bendTime=0이라 화면이 '흐르는' 인상은 안 남.
     if(!paused) U.uTime += dt;
+
     if(paused) return;
 
     const stepPx = app.renderer.width / COLS;

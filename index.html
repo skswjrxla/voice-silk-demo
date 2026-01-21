@@ -2,125 +2,44 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Liquid Silk Voice</title>
-
-  <link rel="stylesheet" href="./bg.css" />
-
-  <style>
-    html,body{margin:0;height:100%;overflow:hidden;}
-    #stage{position:fixed;inset:0;z-index:2;}
-
-    #ui{
-      position:fixed; inset:0; z-index:3;
-      display:flex; align-items:center; justify-content:center;
-      padding:24px;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      color:#0f1430;
-    }
-    .card{
-      width:min(560px, 92vw);
-      border-radius:22px;
-      padding:18px 16px 16px;
-      background: rgba(255,255,255,.55);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
-      border: 1px solid rgba(40,60,120,.14);
-      box-shadow: 0 18px 70px rgba(10,18,40,.14);
-      text-align:center;
-    }
-    .title{margin:0 0 8px;font-size:18px;font-weight:900;}
-    .desc{margin:0 0 14px;font-size:13px;line-height:1.5;color:rgba(10,18,40,.72);}
-    button{
-      border:0; cursor:pointer;
-      padding:12px 16px;border-radius:14px;
-      background: rgba(255,255,255,.76);
-      color:#0f1430; font-weight:900;
-      border: 1px solid rgba(40,60,120,.16);
-      box-shadow: 0 10px 26px rgba(10,18,40,.12);
-    }
-    button:active{transform: translateY(1px);}
-    .badge{
-      display:inline-block;margin-top:10px;
-      padding:6px 10px;border-radius:999px;
-      background: rgba(255,255,255,.66);
-      border:1px solid rgba(40,60,120,.14);
-      font-size:12px;color:rgba(10,18,40,.70);
-      user-select:none;
-    }
-
-    .pill{
-      position:fixed; left:12px; top:10px; z-index:4;
-      padding:8px 10px;border-radius:999px;
-      background: rgba(255,255,255,.66);
-      border: 1px solid rgba(40,60,120,.14);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      box-shadow: 0 8px 22px rgba(10,18,40,.12);
-      font:12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      color:rgba(10,18,40,.72);
-      user-select:none;
-      pointer-events:none;
-    }
-
-    /* 화면에 에러를 띄우는 박스(콘솔 안 열어도 보이게) */
-    #err{
-      position:fixed; left:12px; right:12px; bottom:12px; z-index:999;
-      max-height:38vh; overflow:auto;
-      padding:10px 12px; border-radius:14px;
-      background: rgba(255,255,255,.85);
-      border: 1px solid rgba(255,90,90,.35);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      color: rgba(120,20,20,.95);
-      display:none;
-      white-space:pre-wrap;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b0f16" />
+  <title>Liquid Glass Wave</title>
+  <link rel="stylesheet" href="bg.css?v=1" />
 </head>
 
 <body>
-  <!-- Liquid glass background (fixed) -->
-  <div id="liquidBg" aria-hidden="true"></div>
+  <!-- 고정 배경 레이어 (DOM/CSS) -->
+  <div id="bg" aria-hidden="true">
+    <!-- SVG 필터(카우스틱/왜곡) -->
+    <svg class="bg-svg" width="0" height="0" viewBox="0 0 1 1" aria-hidden="true">
+      <filter id="glassDisplace">
+        <feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="7" result="noise"/>
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="18" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+      <filter id="softBlur">
+        <feGaussianBlur stdDeviation="10"/>
+      </filter>
+    </svg>
 
-  <!-- SVG filters used by bg.css -->
-  <svg width="0" height="0" style="position:absolute">
-    <filter id="lgNoise">
-      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="8" stitchTiles="stitch"/>
-      <feColorMatrix type="matrix"
-        values="1 0 0 0 0
-                0 1 0 0 0
-                0 0 1 0 0
-                0 0 0 0.35 0"/>
-    </filter>
-
-    <filter id="lgDistort">
-      <feTurbulence type="fractalNoise" baseFrequency="0.012" numOctaves="2" seed="3" stitchTiles="stitch" result="noise"/>
-      <feDisplacementMap in="SourceGraphic" in2="noise" scale="28" xChannelSelector="R" yChannelSelector="G"/>
-    </filter>
-  </svg>
-
-  <div class="pill" id="pill">Start 후 화면 터치로 Pause/Resume</div>
-
-  <div id="stage"></div>
-
-  <div id="ui">
-    <div class="card">
-      <p class="title">Liquid Silk Voice</p>
-      <p class="desc">
-        Start로 마이크 허용 → 실크 섬유 파동이 왼→오 이동.<br/>
-        화면 터치(클릭)로 Pause/Resume 토글.
-      </p>
-      <button id="btnStart">Start</button>
-      <div class="badge" id="status">대기 중</div>
-    </div>
+    <div class="bg-base"></div>
+    <div class="bg-caustics"></div>
+    <div class="bg-glass-panel"></div>
+    <div class="bg-vignette"></div>
   </div>
 
-  <div id="err"></div>
+  <!-- 전경(WebGL 캔버스는 투명, BG를 덮어 그리지 않음) -->
+  <div id="fg">
+    <canvas id="gl"></canvas>
+  </div>
 
-  <!-- PixiJS v8 -->
-  <script src="https://cdn.jsdelivr.net/npm/pixi.js@8.15.0/dist/pixi.min.js"></script>
-  <script src="./main.js"></script>
+  <!-- Start / Status UI -->
+  <div id="ui">
+    <button id="startBtn" type="button">Start</button>
+    <div id="hint">마이크 권한 필요 • 탭으로 일시정지/재시작</div>
+    <div id="status" aria-live="polite">대기중</div>
+  </div>
+
+  <script src="main.js?v=1"></script>
 </body>
 </html>

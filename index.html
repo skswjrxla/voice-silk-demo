@@ -3,51 +3,51 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Voice Silk Glass (Debug Safe)</title>
+  <title>Glass Voice Wave</title>
   <style>
-    html,body{margin:0;height:100%;overflow:hidden;background:#f4f7ff;}
+    html,body{margin:0;height:100%;overflow:hidden;background:#f3f6ff;}
     canvas{display:block;width:100vw;height:100vh;touch-action:manipulation;}
-
     .ui{
-      position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+      position:fixed; inset:0;
+      display:flex; align-items:center; justify-content:center;
       padding:24px;
-      background: radial-gradient(900px 520px at 50% 25%, rgba(255,255,255,.88), rgba(240,244,255,.55));
-      color:#10152b;
+      background: radial-gradient(900px 520px at 50% 25%, rgba(255,255,255,.90), rgba(240,244,255,.55));
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      color:#0f1430;
     }
     .card{
       width:min(560px, 92vw);
       border-radius:22px;
       padding:18px 16px 16px;
-      background: rgba(255,255,255,.55);
+      background: rgba(255,255,255,.58);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       border: 1px solid rgba(40,60,120,.14);
       box-shadow: 0 18px 70px rgba(10,18,40,.14);
+      text-align:center;
     }
-    .title{margin:0 0 6px;font-size:18px;font-weight:850;letter-spacing:.2px;}
+    .title{margin:0 0 8px;font-size:18px;font-weight:900;letter-spacing:.2px;}
     .desc{margin:0 0 14px;font-size:13px;line-height:1.5;color:rgba(10,18,40,.72);}
-    .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
     button{
       border:0; cursor:pointer;
-      padding:12px 14px;border-radius:14px;
-      background: rgba(255,255,255,.70);
-      color:#0f142a; font-weight:800;
+      padding:12px 16px;border-radius:14px;
+      background: rgba(255,255,255,.72);
+      color:#0f1430; font-weight:900;
       border: 1px solid rgba(40,60,120,.16);
       box-shadow: 0 10px 26px rgba(10,18,40,.12);
     }
-    button:active{transform:translateY(1px);}
+    button:active{transform: translateY(1px);}
     .badge{
       display:inline-block;margin-top:10px;
       padding:6px 10px;border-radius:999px;
-      background: rgba(255,255,255,.65);
+      background: rgba(255,255,255,.66);
       border:1px solid rgba(40,60,120,.14);
       font-size:12px;color:rgba(10,18,40,.70);
     }
     .hint{
       position:fixed;left:12px;top:10px;z-index:5;
       padding:8px 10px;border-radius:999px;
-      background: rgba(255,255,255,.62);
+      background: rgba(255,255,255,.64);
       border: 1px solid rgba(40,60,120,.14);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
@@ -56,40 +56,22 @@
       color:rgba(10,18,40,.72);
       user-select:none;
     }
-    .err{
-      position:fixed; left:12px; bottom:12px; right:12px; z-index:6;
-      padding:10px 12px; border-radius:14px;
-      background: rgba(255,255,255,.78);
-      border:1px solid rgba(255,90,90,.34);
-      color:rgba(120,20,20,.90);
-      font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      display:none;
-      white-space:pre-wrap;
-      max-height:35vh;
-      overflow:auto;
-    }
   </style>
 </head>
 <body>
-  <div class="hint">PC: 버튼 클릭 → 상태 변하는지 확인. (에러 뜨면 아래 빨간 박스)</div>
+  <div class="hint">Mic only · 유리 배경 + 세로 스트랜드 파동 (최적화)</div>
   <canvas id="c"></canvas>
-  <div class="err" id="err"></div>
 
   <div class="ui" id="ui">
     <div class="card">
-      <p class="title">Voice Silk Glass</p>
+      <p class="title">Glass Voice Wave</p>
       <p class="desc">
-        버튼이 아무 반응이 없다면 스크립트가 중간에 죽은 상태일 수 있어요.<br/>
-        이 버전은 에러를 화면 하단에 띄워서 원인을 바로 보이게 합니다.
+        “이어진 선분” 없이, 세로 얇은 선들이 촘촘히 쌓여 파동처럼 보입니다.<br/>
+        색은 항상 위=빨강, 아래=보라 무지개 그라데이션(유리 톤)입니다.
       </p>
-      <div class="row">
-        <button id="btnDemo">데모 사운드</button>
-        <button id="btnMic">마이크</button>
-      </div>
+      <button id="btnMic">마이크 시작</button>
       <div class="desc" style="margin-top:10px;">
-        (마이크는 HTTPS에서만 대부분 동작) / 데모는 보통 어디서든 동작
+        마이크는 HTTPS에서 동작합니다. (GitHub Pages OK)
       </div>
       <div class="badge" id="status">대기 중</div>
     </div>
@@ -97,470 +79,334 @@
 
 <script>
 (() => {
-  const errBox = document.getElementById("err");
-  const showErr = (e) => {
-    errBox.style.display = "block";
-    errBox.textContent = String(e?.stack || e);
-  };
-  window.addEventListener("error", (e)=>showErr(e.error || e.message));
-  window.addEventListener("unhandledrejection", (e)=>showErr(e.reason));
-
-  try {
-    const canvas = document.getElementById("c");
-    const ctx = canvas.getContext("2d", { alpha:false });
-
-    const ui = document.getElementById("ui");
-    const statusEl = document.getElementById("status");
-    const btnDemo = document.getElementById("btnDemo");
-    const btnMic = document.getElementById("btnMic");
-
-    const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
-    const lerp = (a,b,t)=>a+(b-a)*t;
-    const rand = (a=1,b=0)=>Math.random()*(a-b)+b;
-
-    let W=0,H=0,DPR=1;
-    const bgCanvas = document.createElement("canvas");
-    const bgCtx = bgCanvas.getContext("2d", { alpha:false });
-
-    // --- fast, safe grain tile (one-time)
-    const noiseTile = document.createElement("canvas");
-    noiseTile.width = 96; noiseTile.height = 96;
-    const nctx = noiseTile.getContext("2d", { alpha:true });
-    {
-      const img = nctx.createImageData(96,96);
-      const d = img.data;
-      for(let i=0;i<d.length;i+=4){
-        const v = 245 + ((Math.random()*18)|0) - 9;
-        d[i]=v; d[i+1]=v; d[i+2]=v;
-        d[i+3]=16 + ((Math.random()*24)|0);
-      }
-      nctx.putImageData(img,0,0);
-    }
-
-    let noisePat = null;
-
-    function prismBlob(cx,cy,r,rot){
-      const g = bgCtx.createRadialGradient(cx,cy,r*0.2, cx,cy,r);
-      g.addColorStop(0.00, "rgba(255,255,255,0.55)");
-      g.addColorStop(0.28, "rgba(210,240,255,0.22)");
-      g.addColorStop(0.52, "rgba(235,220,255,0.16)");
-      g.addColorStop(0.72, "rgba(255,225,235,0.12)");
-      g.addColorStop(1.00, "rgba(255,255,255,0.0)");
-
-      bgCtx.save();
-      bgCtx.globalCompositeOperation = "screen";
-      bgCtx.translate(cx,cy);
-      bgCtx.rotate(rot);
-      bgCtx.translate(-cx,-cy);
-      bgCtx.fillStyle = g;
-      bgCtx.beginPath();
-      bgCtx.ellipse(cx,cy,r*1.12,r*0.78,rot,0,Math.PI*2);
-      bgCtx.fill();
-      bgCtx.restore();
-    }
-
-    function buildGlassBackground(){
-      const g = bgCtx.createLinearGradient(0,0,0,H);
-      g.addColorStop(0, "#ffffff");
-      g.addColorStop(0.45, "#f4f7ff");
-      g.addColorStop(1, "#eef3ff");
-      bgCtx.fillStyle = g;
-      bgCtx.fillRect(0,0,W,H);
-
-      for(let i=0;i<7;i++){
-        const cx = rand(0.88*W, 0.12*W);
-        const cy = rand(0.80*H, 0.12*H);
-        const r  = rand(0.30, 0.16) * Math.min(W,H);
-        prismBlob(cx,cy,r, rand(Math.PI,0));
-      }
-
-      // silk fibers (subtle)
-      bgCtx.save();
-      bgCtx.globalCompositeOperation = "multiply";
-      bgCtx.lineCap = "round";
-      const fiberCount = Math.floor((W*H)/(17000*DPR));
-      for(let i=0;i<fiberCount;i++){
-        const x0 = rand(W*1.1, -W*0.1);
-        const y0 = rand(H*1.1, -H*0.1);
-        const len = rand(1.2,0.55)*Math.max(W,H);
-        const ang = (rand(0.55,-0.55))*0.35 + Math.PI*0.04;
-        const dx = Math.cos(ang)*len;
-        const dy = Math.sin(ang)*len;
-        const wob = rand(26,10)*DPR;
-
-        const x3 = x0 + dx, y3 = y0 + dy;
-        const x1 = x0 + dx*0.33 + wob*(Math.random()-0.5);
-        const y1 = y0 + dy*0.33 + wob*(Math.random()-0.5);
-        const x2 = x0 + dx*0.66 - wob*(Math.random()-0.5);
-        const y2 = y0 + dy*0.66 - wob*(Math.random()-0.5);
-
-        bgCtx.strokeStyle = `rgba(40,60,120,${rand(0.050,0.020)})`;
-        bgCtx.lineWidth = rand(1.0,0.35)*DPR;
-        bgCtx.beginPath();
-        bgCtx.moveTo(x0,y0);
-        bgCtx.bezierCurveTo(x1,y1,x2,y2,x3,y3);
-        bgCtx.stroke();
-      }
-      bgCtx.restore();
-
-      // frosted grain
-      noisePat = bgCtx.createPattern(noiseTile, "repeat");
-      bgCtx.save();
-      bgCtx.globalCompositeOperation = "soft-light";
-      bgCtx.globalAlpha = 0.25;
-      bgCtx.fillStyle = noisePat;
-      bgCtx.fillRect(0,0,W,H);
-      bgCtx.restore();
-
-      const vg = bgCtx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.30, W/2,H/2, Math.max(W,H)*0.98);
-      vg.addColorStop(0, "rgba(255,255,255,0)");
-      vg.addColorStop(1, "rgba(20,35,90,0.09)");
-      bgCtx.fillStyle = vg;
-      bgCtx.fillRect(0,0,W,H);
-    }
-
-    function resize(){
-      DPR = Math.min(2, window.devicePixelRatio || 1);
-      W = Math.floor(innerWidth * DPR);
-      H = Math.floor(innerHeight * DPR);
-      canvas.width = W; canvas.height = H;
-      canvas.style.width = innerWidth + "px";
-      canvas.style.height = innerHeight + "px";
-
-      bgCanvas.width = W;
-      bgCanvas.height = H;
-      buildGlassBackground();
-    }
-    addEventListener("resize", resize, { passive:true });
-    resize();
-
-    // --- audio
-    let audioCtx=null, analyser=null, stream=null, source=null;
-    let osc=null, gainNode=null;
-    let dataTime=null;
-
-    function status(msg){ statusEl.textContent = msg; }
-
-    function stopAudio(){
-      try{ if(stream) stream.getTracks().forEach(t=>t.stop()); }catch(_){}
-      stream=null;
-      try{ if(osc) osc.stop(); }catch(_){}
-      osc=null;
-      try{ if(audioCtx) audioCtx.close(); }catch(_){}
-      audioCtx=null; analyser=null; source=null; gainNode=null; dataTime=null;
-    }
-
-    async function initDemo(){
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      await audioCtx.resume();
-
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.82;
-      dataTime = new Uint8Array(analyser.fftSize);
-
-      osc = audioCtx.createOscillator();
-      gainNode = audioCtx.createGain();
-      osc.type = "sine";
-      gainNode.gain.value = 0.0;
-
-      osc.connect(gainNode);
-      gainNode.connect(analyser);
-      analyser.connect(audioCtx.destination);
-      osc.start();
-
-      const t0 = audioCtx.currentTime;
-      const pump = () => {
-        if(!audioCtx) return;
-        const t = audioCtx.currentTime - t0;
-        const env = 0.18 + 0.22*Math.max(0, Math.sin(t*1.25)) + 0.12*Math.max(0, Math.sin(t*2.35+1.2));
-        gainNode.gain.setTargetAtTime(env, audioCtx.currentTime, 0.06);
-        const f = 150 + 85*(0.5+0.5*Math.sin(t*0.72)) + 55*(0.5+0.5*Math.sin(t*1.45+2.0));
-        osc.frequency.setTargetAtTime(f, audioCtx.currentTime, 0.08);
-        requestAnimationFrame(pump);
-      };
-      pump();
-    }
-
-    async function initMic(){
-      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-      await audioCtx.resume();
-
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
-      });
-
-      source = audioCtx.createMediaStreamSource(stream);
-      analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 2048;
-      analyser.smoothingTimeConstant = 0.82;
-      dataTime = new Uint8Array(analyser.fftSize);
-
-      source.connect(analyser);
-    }
-
-    function computeVolumeRMS(){
-      if(!analyser || !dataTime) return 0;
-      analyser.getByteTimeDomainData(dataTime);
-      let sum=0;
-      for(let i=0;i<dataTime.length;i++){
-        const v=(dataTime[i]-128)/128;
-        sum += v*v;
-      }
-      return clamp(Math.sqrt(sum/dataTime.length), 0, 1);
-    }
-
-    // --- icy colors (fixed by strand position, not random)
-    function icyColor(t, a){
-      let hue;
-      if(t < 0.55){
-        const u = t/0.55;
-        hue = lerp(330, 205, u); // magenta -> icy blue
-      }else{
-        const u = (t-0.55)/0.45;
-        hue = lerp(205, 270, u); // icy blue -> violet
-      }
-      const sat = 65;
-      const light = lerp(74, 62, t);
-      return `hsla(${hue.toFixed(1)}, ${sat}%, ${light.toFixed(1)}%, ${a})`;
-    }
-
-    // --- wave model
-    const slices=[];
-    let smoothedVol=0;
-    let spawnAcc=0;
-    let lastTime=performance.now();
-
-    const speedPx=520;
-    const maxSlices=820;
-    const spawnRate=150;
-
-    const STRANDS=64;
-    const BUNDLE_THICKNESS=42;
-    const LINE_W=0.85;
-
-    // beads
-    const beads=[];
-    function spawnBead(vol){
-      const p = clamp((vol-0.05)*2.2, 0, 1);
-      if(Math.random() > p) return;
-      beads.push({ x:0, life:1.0, t:Math.random(), r:(2.5+10*vol)*DPR, seed:Math.random()*10 });
-      if(beads.length > 90) beads.splice(0, beads.length-90);
-    }
-    function sampleY(points, x){
-      for(let i=1;i<points.length;i++){
-        const p0=points[i-1], p1=points[i];
-        if(p0.x <= x && x <= p1.x){
-          const t=(x-p0.x)/Math.max(1e-6,(p1.x-p0.x));
-          return lerp(p0.y,p1.y,t);
-        }
-      }
-      return null;
-    }
-    function fiberFlutter(now, x, t){
-      const tt = now*0.001;
-      return (
-        Math.sin(tt*2.1 + x*0.004 + t*4.2) * 0.55 +
-        Math.sin(tt*1.0 + x*0.006 + t*8.0 + 1.8) * 0.45
-      );
-    }
-
-    function drawSilkBundle(points, now){
-      if(points.length < 3) return;
-      const step = points.length > 760 ? 2 : 1;
-      const thick = BUNDLE_THICKNESS*DPR;
-
-      ctx.save();
-      ctx.lineCap="round";
-      ctx.lineJoin="round";
-
-      ctx.shadowBlur = 16*DPR;
-      ctx.shadowColor = "rgba(10,18,40,0.10)";
-
-      for(let k=0;k<STRANDS;k++){
-        const t = k/(STRANDS-1);
-        const off = (t-0.5)*thick;
-        const centerWeight = Math.exp(-Math.pow((t-0.50)/0.22,2));
-        const a = 0.030 + 0.055*centerWeight;
-
-        ctx.strokeStyle = icyColor(t, a);
-        ctx.lineWidth = LINE_W*DPR;
-
-        ctx.beginPath();
-        let started=false;
-        for(let i=step;i<points.length;i+=step){
-          const p0=points[i-step], p1=points[i];
-          const flutter = fiberFlutter(now, p1.x, t) * (1.25*DPR);
-          const x0=p0.x, y0=p0.y + off + flutter*(0.8+0.7*p0.env);
-          const x1=p1.x, y1=p1.y + off + flutter*(0.8+0.7*p1.env);
-          if(!started){ ctx.moveTo(x0,y0); started=true; }
-          ctx.lineTo(x1,y1);
-        }
-        ctx.stroke();
-      }
-
-      ctx.globalCompositeOperation="screen";
-      ctx.shadowBlur = 24*DPR;
-      ctx.shadowColor = "rgba(255,255,255,0.30)";
-
-      for(let k=0;k<STRANDS;k++){
-        const t = k/(STRANDS-1);
-        const off = (t-0.5)*thick;
-        const band = Math.exp(-Math.pow((t-0.43)/0.18,2));
-        const a = 0.010 + 0.080*band;
-
-        ctx.strokeStyle = icyColor(t, a);
-        ctx.lineWidth = 0.65*DPR;
-
-        ctx.beginPath();
-        let started=false;
-        for(let i=step;i<points.length;i+=step){
-          const p0=points[i-step], p1=points[i];
-          const flutter = fiberFlutter(now+140, p1.x, t) * (1.0*DPR);
-          const x0=p0.x, y0=p0.y + off + flutter*(0.9+0.8*p0.env);
-          const x1=p1.x, y1=p1.y + off + flutter*(0.9+0.8*p1.env);
-          if(!started){ ctx.moveTo(x0,y0); started=true; }
-          ctx.lineTo(x1,y1);
-        }
-        ctx.stroke();
-      }
-
-      ctx.restore();
-    }
-
-    function drawBeads(points, dt){
-      if(points.length < 3) return;
-      for(const b of beads){
-        b.x += speedPx*DPR*dt;
-        b.life *= (1 - 0.18*dt);
-      }
-      while(beads.length && (beads[0].x > W + 120*DPR || beads[0].life < 0.08)) beads.shift();
-
-      ctx.save();
-      ctx.globalCompositeOperation="screen";
-      for(const b of beads){
-        const yBase = sampleY(points, b.x);
-        if(yBase == null) continue;
-        const thick = BUNDLE_THICKNESS*DPR;
-        const off = (b.t-0.5)*thick;
-        const y = yBase + off + Math.sin(b.seed + b.x*0.01)*1.2*DPR;
-        const r = b.r;
-        const a = clamp(0.10 + 0.55*b.life, 0, 0.65);
-
-        const grad = ctx.createRadialGradient(b.x - r*0.35, y - r*0.35, r*0.2, b.x, y, r);
-        grad.addColorStop(0.00, `rgba(255,255,255,${0.85*a})`);
-        grad.addColorStop(0.35, icyColor(b.t, 0.55*a));
-        grad.addColorStop(0.70, `rgba(190,230,255,${0.22*a})`);
-        grad.addColorStop(1.00, `rgba(255,255,255,0)`);
-
-        ctx.fillStyle = grad;
-        ctx.beginPath(); ctx.arc(b.x, y, r, 0, Math.PI*2); ctx.fill();
-
-        ctx.fillStyle = `rgba(255,255,255,${0.45*a})`;
-        ctx.beginPath(); ctx.arc(b.x - r*0.28, y - r*0.28, r*0.25, 0, Math.PI*2); ctx.fill();
-      }
-      ctx.restore();
-    }
-
-    function drawSheenSweep(now){
-      const tt = (now*0.00018) % 1;
-      const cx = (0.15 + 0.85*tt) * W;
-      const w = 0.18*W;
-      const g = ctx.createLinearGradient(cx-w, 0, cx+w, 0);
-      g.addColorStop(0.00, "rgba(255,255,255,0)");
-      g.addColorStop(0.50, "rgba(255,255,255,0.12)");
-      g.addColorStop(1.00, "rgba(255,255,255,0)");
-      ctx.save();
-      ctx.globalCompositeOperation="screen";
-      ctx.fillStyle = g;
-      ctx.fillRect(0,0,W,H);
-      ctx.restore();
-    }
-
-    // --- main loop
-    function animate(now){
-      const dt = Math.min(0.05, (now-lastTime)/1000);
-      lastTime = now;
-
-      ctx.drawImage(bgCanvas,0,0);
-
-      const vol = computeVolumeRMS();
-      smoothedVol = lerp(smoothedVol, vol, 1 - Math.pow(0.001, dt));
-
-      spawnAcc += dt*spawnRate;
-      while(spawnAcc >= 1){
-        spawnAcc -= 1;
-        slices.push({ x:0, vol:smoothedVol, seed:Math.random()*10 });
-        if(slices.length > maxSlices) slices.splice(0, slices.length-maxSlices);
-        spawnBead(smoothedVol);
-      }
-
-      for(const s of slices){
-        s.x += speedPx*DPR*dt;
-        s.vol *= (1 - 0.12*dt);
-      }
-      while(slices.length && slices[0].x > W + 100*DPR) slices.shift();
-
-      const midY = H*0.54;
-      const tNow = now*0.0011;
-      const spatial = 0.020*DPR;
-      const ampMax = H*0.17;
-
-      const pts=[];
-      for(const s of slices){
-        const env = clamp(s.vol*2.7, 0.02, 1.0);
-        const amp = env*ampMax;
-        const wob = (
-          Math.sin((tNow+s.seed)*0.7)*0.55 +
-          Math.sin((tNow*1.4+s.seed+1.3)*1.7)*0.25 +
-          Math.sin((tNow*2.2+s.seed+2.7)*3.1)*0.20
-        ) * 0.26;
-        const phase = tNow*3.0 + s.seed*1.6 + s.x*spatial;
-        const y = midY + (Math.sin(phase)+wob)*amp;
-        pts.push({ x:s.x, y, env, seed:s.seed });
-      }
-
-      drawSilkBundle(pts, now);
-      drawBeads(pts, dt);
-      drawSheenSweep(now);
-
-      requestAnimationFrame(animate);
-    }
-    requestAnimationFrame(animate);
-
-    // --- Start handlers (THIS is what you need to test)
-    btnDemo.addEventListener("click", async () => {
-      try{
-        status("버튼 클릭됨: 데모 시작 중…");
-        stopAudio();
-        await initDemo();
-        status("데모 실행 중");
-        ui.style.display="none";
-      }catch(e){
-        showErr(e);
-        status("데모 실패(에러 확인)");
-      }
-    });
-
-    btnMic.addEventListener("click", async () => {
-      try{
-        status("버튼 클릭됨: 마이크 요청 중…");
-        stopAudio();
-        await initMic();
-        status("마이크 연결됨");
-        ui.style.display="none";
-      }catch(e){
-        showErr(e);
-        status("마이크 실패(HTTPS/권한 확인)");
-      }
-    });
-
-    // sanity check
-    status("대기 중 (JS 정상 로드됨) — 버튼을 눌러보세요");
-
-  } catch (e) {
-    showErr(e);
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha:false });
+
+  const ui = document.getElementById("ui");
+  const btnMic = document.getElementById("btnMic");
+  const statusEl = document.getElementById("status");
+  const status = (t)=>statusEl.textContent=t;
+
+  // --- perf knobs (중요)
+  // DPR 제한: 모바일/인앱에서 렉 방지 핵심
+  let DPR = 1;
+  let W=0,H=0;
+
+  // background cache
+  const bg = document.createElement("canvas");
+  const bgx = bg.getContext("2d", { alpha:false });
+
+  // wave ping-pong (전체 재렌더 X, shift만)
+  let waveA = document.createElement("canvas");
+  let waveB = document.createElement("canvas");
+  let wA = waveA.getContext("2d", { alpha:true });
+  let wB = waveB.getContext("2d", { alpha:true });
+
+  // audio
+  let audioCtx=null, analyser=null, source=null, stream=null;
+  let dataTime=null;
+
+  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+  const lerp=(a,b,t)=>a+(b-a)*t;
+
+  function resize(){
+    DPR = Math.min(1.5, window.devicePixelRatio || 1); // <-- 최적화 포인트
+    W = Math.floor(innerWidth * DPR);
+    H = Math.floor(innerHeight * DPR);
+    canvas.width = W; canvas.height = H;
+    canvas.style.width = innerWidth+"px";
+    canvas.style.height = innerHeight+"px";
+
+    bg.width = W; bg.height = H;
+    waveA.width = W; waveA.height = H;
+    waveB.width = W; waveB.height = H;
+
+    // clear wave buffers
+    wA.clearRect(0,0,W,H);
+    wB.clearRect(0,0,W,H);
+
+    buildGlassBackground();
   }
+  addEventListener("resize", resize, { passive:true });
+  resize();
+
+  // ---- Background (유리 느낌, 매우 가벼움: per-pixel 루프 없음)
+  function buildGlassBackground(){
+    // base gradient
+    const g = bgx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, "#ffffff");
+    g.addColorStop(0.45, "#f3f6ff");
+    g.addColorStop(1, "#edf2ff");
+    bgx.fillStyle = g;
+    bgx.fillRect(0,0,W,H);
+
+    // prismatic blobs (몇 개만)
+    for(let i=0;i<6;i++){
+      const cx = (0.12 + Math.random()*0.76)*W;
+      const cy = (0.12 + Math.random()*0.76)*H;
+      const r  = (0.12 + Math.random()*0.18)*Math.min(W,H);
+      const rg = bgx.createRadialGradient(cx,cy,r*0.15, cx,cy,r);
+      rg.addColorStop(0.00, "rgba(255,255,255,0.60)");
+      rg.addColorStop(0.30, "rgba(210,240,255,0.22)");
+      rg.addColorStop(0.55, "rgba(235,220,255,0.16)");
+      rg.addColorStop(0.75, "rgba(255,225,235,0.12)");
+      rg.addColorStop(1.00, "rgba(255,255,255,0.0)");
+      bgx.save();
+      bgx.globalCompositeOperation = "screen";
+      bgx.fillStyle = rg;
+      bgx.beginPath();
+      bgx.ellipse(cx,cy,r*1.15,r*0.78, Math.random()*Math.PI, 0, Math.PI*2);
+      bgx.fill();
+      bgx.restore();
+    }
+
+    // frosted grain: 작은 타일 패턴 1회 생성 후 패턴 채우기 (가벼움)
+    const tile = document.createElement("canvas");
+    tile.width = 96; tile.height = 96;
+    const tctx = tile.getContext("2d", { alpha:true });
+    const img = tctx.createImageData(96,96);
+    const d = img.data;
+    for(let i=0;i<d.length;i+=4){
+      const v = 245 + ((Math.random()*18)|0) - 9;
+      d[i]=v; d[i+1]=v; d[i+2]=v;
+      d[i+3]=14 + ((Math.random()*22)|0);
+    }
+    tctx.putImageData(img,0,0);
+
+    const pat = bgx.createPattern(tile, "repeat");
+    bgx.save();
+    bgx.globalCompositeOperation = "soft-light";
+    bgx.globalAlpha = 0.22;
+    bgx.fillStyle = pat;
+    bgx.fillRect(0,0,W,H);
+    bgx.restore();
+
+    // subtle vignette (밝게 유지)
+    const vg = bgx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35, W/2,H/2, Math.max(W,H)*0.98);
+    vg.addColorStop(0, "rgba(255,255,255,0)");
+    vg.addColorStop(1, "rgba(20,35,90,0.08)");
+    bgx.fillStyle = vg;
+    bgx.fillRect(0,0,W,H);
+  }
+
+  // ---- Audio: RMS volume only (가장 가벼움)
+  async function startMic(){
+    status("마이크 요청 중…");
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await audioCtx.resume();
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+    });
+
+    source = audioCtx.createMediaStreamSource(stream);
+    analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;              // 가볍게
+    analyser.smoothingTimeConstant = 0.85;
+    source.connect(analyser);
+
+    dataTime = new Uint8Array(analyser.fftSize);
+    status("마이크 연결됨");
+  }
+
+  function computeRMS(){
+    if(!analyser || !dataTime) return 0;
+    analyser.getByteTimeDomainData(dataTime);
+    let sum = 0;
+    for(let i=0;i<dataTime.length;i++){
+      const v = (dataTime[i]-128)/128;
+      sum += v*v;
+    }
+    return clamp(Math.sqrt(sum/dataTime.length), 0, 1);
+  }
+
+  // ---- Wave columns: 세로 스트랜드 컬럼만 (이어지는 선분 X)
+  // shift 방식: waveA를 waveB에 dx만큼 밀어넣고, x=0에 새 컬럼 찍기
+  const midFactor = 0.54;
+  const speed = 360;          // px/sec (DPR 포함 적용)
+  const colW = 6;             // 새 컬럼 폭(px @ DPR=1). 촘촘할수록 작게
+  const strandCount = 6;      // 컬럼 안에서 1px 스트랜드 몇 줄로 보일지
+
+  // glassy rainbow gradient: 항상 위 red -> 아래 violet
+  // (HSL hue 0 -> 270)
+  function makeRainbowGradient(y1,y2, alpha=1){
+    const g = wB.createLinearGradient(0,y1,0,y2);
+    // 무지개 스펙트럼 고정
+    g.addColorStop(0.00, `hsla(0,   90%, 62%, ${alpha})`);   // red
+    g.addColorStop(0.16, `hsla(35,  92%, 62%, ${alpha})`);   // orange
+    g.addColorStop(0.33, `hsla(60,  90%, 62%, ${alpha})`);   // yellow
+    g.addColorStop(0.50, `hsla(135, 85%, 60%, ${alpha})`);   // green
+    g.addColorStop(0.66, `hsla(200, 88%, 62%, ${alpha})`);   // cyan/blue
+    g.addColorStop(0.82, `hsla(235, 88%, 62%, ${alpha})`);   // deep blue
+    g.addColorStop(1.00, `hsla(270, 88%, 62%, ${alpha})`);   // violet
+    return g;
+  }
+
+  let last = performance.now();
+  let acc = 0;
+  let smVol = 0;
+
+  function drawColumn(vol){
+    const midY = H * midFactor;
+    const ampMax = H * 0.22;          // 최대 진폭
+    const amp = (0.02 + vol*1.05) * ampMax;
+
+    const y1 = midY - amp;
+    const y2 = midY + amp;
+
+    // 컬럼 자체가 "유리"처럼 보이게: 컬럼 안 여러 스트랜드 + 하이라이트
+    const baseGrad = makeRainbowGradient(y1,y2, 0.58);
+    const hiGrad   = makeRainbowGradient(y1,y2, 0.30);
+
+    // base pass
+    wB.save();
+    wB.globalCompositeOperation = "source-over";
+    wB.lineCap = "round";
+    wB.shadowBlur = 10 * DPR;
+    wB.shadowColor = "rgba(255,255,255,0.22)";
+
+    for(let s=0;s<strandCount;s++){
+      const t = strandCount<=1 ? 0.5 : s/(strandCount-1);
+      // 가운데가 더 밝게
+      const a = 0.10 + 0.18 * Math.exp(-Math.pow((t-0.5)/0.32,2));
+      const x = (s * (colW*DPR)/(strandCount-1 || 1));
+
+      wB.globalAlpha = a;
+      wB.strokeStyle = baseGrad;
+      wB.lineWidth = 1.0 * DPR;
+      wB.beginPath();
+      wB.moveTo(x, y1);
+      wB.lineTo(x, y2);
+      wB.stroke();
+    }
+    wB.restore();
+
+    // highlight pass (screen) : 유리 스펙
+    wB.save();
+    wB.globalCompositeOperation = "screen";
+    wB.shadowBlur = 16 * DPR;
+    wB.shadowColor = "rgba(255,255,255,0.28)";
+
+    // 중앙 하이라이트 1~2줄만
+    const cx = (colW*DPR) * 0.55;
+    wB.strokeStyle = hiGrad;
+    wB.globalAlpha = 0.55;
+    wB.lineWidth = 0.9 * DPR;
+    wB.beginPath();
+    wB.moveTo(cx, y1);
+    wB.lineTo(cx, y2);
+    wB.stroke();
+
+    wB.strokeStyle = "rgba(255,255,255,0.38)";
+    wB.globalAlpha = 0.25;
+    wB.lineWidth = 0.7 * DPR;
+    wB.beginPath();
+    wB.moveTo(cx - 1.2*DPR, y1 + 1.2*DPR);
+    wB.lineTo(cx - 1.2*DPR, y2 - 1.2*DPR);
+    wB.stroke();
+
+    wB.restore();
+  }
+
+  function step(now){
+    const dt = Math.min(0.05, (now-last)/1000);
+    last = now;
+
+    // background draw
+    ctx.drawImage(bg, 0, 0);
+
+    // update volume (smoothing)
+    const v = computeRMS();
+    smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
+
+    // determine how many pixels to shift this frame
+    acc += speed * DPR * dt;
+
+    // ping-pong shift in chunks of colW to keep columns crisp
+    const stepPx = Math.max(1, Math.floor(colW * DPR));
+    const shifts = Math.floor(acc / stepPx);
+    if(shifts > 0){
+      acc -= shifts * stepPx;
+
+      // copy A -> B shifted right
+      // (B를 깨끗하게 만들고, A를 오른쪽으로 밀어넣기)
+      wB.setTransform(1,0,0,1,0,0);
+      wB.clearRect(0,0,W,H);
+      wB.drawImage(waveA, shifts*stepPx, 0);
+
+      // 아주 약한 잔상 페이드 (과포화/번짐 방지)
+      wB.save();
+      wB.globalCompositeOperation = "destination-in";
+      wB.fillStyle = "rgba(255,255,255,0.985)";
+      wB.fillRect(0,0,W,H);
+      wB.restore();
+
+      // draw new columns for each shift step
+      for(let i=0;i<shifts;i++){
+        // x=0에 새 컬럼 (세로 스트랜드 다발) 찍기
+        drawColumn(smVol);
+        // 다음 컬럼을 위해 이미지를 다시 stepPx만큼 더 밀지는 않음:
+        // shifts가 크면 여러 컬럼이 같은 x에 겹치므로, 약간 x오프셋으로 밀어줌
+        // -> 아주 싸게: 현재 B를 왼쪽으로 아주 약간 당겨서 다음 컬럼 공간 확보
+        if(i < shifts-1){
+          // B를 stepPx만큼 다시 오른쪽으로 밀어 "다음 컬럼 자리" 만들기
+          const tmp = waveA; waveA = waveB; waveB = tmp;
+          wA = waveA.getContext("2d", { alpha:true });
+          wB = waveB.getContext("2d", { alpha:true });
+
+          wB.clearRect(0,0,W,H);
+          wB.drawImage(waveA, stepPx, 0);
+
+          wB.save();
+          wB.globalCompositeOperation = "destination-in";
+          wB.fillStyle = "rgba(255,255,255,0.985)";
+          wB.fillRect(0,0,W,H);
+          wB.restore();
+        }
+      }
+
+      // swap buffers at end (B is newest)
+      const t = waveA; waveA = waveB; waveB = t;
+      wA = waveA.getContext("2d", { alpha:true });
+      wB = waveB.getContext("2d", { alpha:true });
+    }
+
+    // composite wave over bg
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.drawImage(waveA, 0, 0);
+    ctx.restore();
+
+    // subtle moving glass sheen (cheap)
+    const tt = (now*0.00016) % 1;
+    const cx = (0.1 + 0.9*tt)*W;
+    const w = 0.18*W;
+    const sg = ctx.createLinearGradient(cx-w,0,cx+w,0);
+    sg.addColorStop(0.00,"rgba(255,255,255,0)");
+    sg.addColorStop(0.50,"rgba(255,255,255,0.10)");
+    sg.addColorStop(1.00,"rgba(255,255,255,0)");
+    ctx.save();
+    ctx.globalCompositeOperation="screen";
+    ctx.fillStyle = sg;
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
+
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+
+  // ---- UI
+  btnMic.addEventListener("click", async () => {
+    try{
+      status("버튼 클릭됨: 시작 중…");
+      await startMic();
+      ui.style.display = "none";
+    }catch(e){
+      console.error(e);
+      status("마이크 실패: HTTPS/권한 확인");
+    }
+  });
+
 })();
 </script>
 </body>

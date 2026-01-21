@@ -1,4 +1,4 @@
-(() => {
+(async () => {
   const ui = document.getElementById("ui");
   const btnStart = document.getElementById("btnStart");
   const statusEl = document.getElementById("status");
@@ -8,47 +8,49 @@
 
   const status = (t) => { if (statusEl) statusEl.textContent = t; };
   const showErr = (msg) => {
+    if (!errBox) { console.error(msg); return; }
     errBox.style.display = "block";
     errBox.textContent = String(msg);
   };
 
-  // --- Always surface errors on screen ---
+  // 화면에 에러를 바로 표시
   window.addEventListener("error", (e) => showErr("JS Error:\n" + (e.error?.stack || e.message || e)));
   window.addEventListener("unhandledrejection", (e) => showErr("Promise Error:\n" + (e.reason?.stack || e.reason)));
 
   status("main.js 로드됨");
 
-  // Pixi not loaded => Start will never work
   if (!window.PIXI) {
-    showErr("PIXI 로드 실패: CDN이 차단되었거나 네트워크 문제입니다.\n(DevTools > Network에서 pixi.min.js 확인)");
+    showErr("PIXI 로드 실패: pixi.min.js(CDN) 로딩이 안 됐습니다.");
     status("PIXI 로드 실패");
     return;
   }
 
   // -------------------------
-  // Pixi App (transparent)
+  // ✅ Pixi v8 올바른 초기화 (핵심 수정)
+  // v8부터는 constructor에 옵션 넣지 말고, await app.init() 사용 :contentReference[oaicite:1]{index=1}
   // -------------------------
   let app;
   try {
-    app = new PIXI.Application({
+    app = new PIXI.Application();
+    await app.init({
       resizeTo: window,
       backgroundAlpha: 0,
       antialias: true,
-      powerPreference: "high-performance",
       autoDensity: true,
       resolution: Math.min(1.5, window.devicePixelRatio || 1),
+      powerPreference: "high-performance",
     });
   } catch (e) {
-    showErr("PIXI Application 생성 실패:\n" + (e.stack || e));
+    showErr("PIXI Application init 실패:\n" + (e.stack || e));
     status("렌더러 실패");
     return;
   }
 
+  // v8: app.canvas가 존재 :contentReference[oaicite:2]{index=2}
   stage.appendChild(app.canvas);
 
-  // Fullscreen sprite (filter target)
+  // 필터 적용 대상(전체 화면)
   const screen = new PIXI.Sprite(PIXI.Texture.WHITE);
-  screen.anchor.set(0);
   screen.width = app.renderer.width;
   screen.height = app.renderer.height;
   app.stage.addChild(screen);
@@ -93,35 +95,33 @@
   }
 
   // -------------------------
-  // Amp ring texture (Canvas 1px-high, super stable)
+  // Amp ring texture (1px canvas -> texture)
   // -------------------------
   const COLS = 1024;
 
   const ampCanvas = document.createElement("canvas");
   ampCanvas.width = COLS;
   ampCanvas.height = 1;
-  const ampCtx = ampCanvas.getContext("2d", { willReadFrequently: true });
+  const ampCtx = ampCanvas.getContext("2d");
 
   const img = ampCtx.createImageData(COLS, 1);
-  const px = img.data; // Uint8ClampedArray length = COLS*4
+  const px = img.data;
   for(let i=0;i<COLS;i++){
     px[i*4+0]=0; px[i*4+1]=0; px[i*4+2]=0; px[i*4+3]=255;
   }
   ampCtx.putImageData(img, 0, 0);
 
-  // Pixi v8: Texture.from(canvas) OK. (resource is texture.source)
   const ampTex = PIXI.Texture.from(ampCanvas);
 
   let headOffset = 0;
   let scrollPx = 0;
   const speedPx = 520;
 
-  // “무음은 매우 작게”, “조금만 커져도 매우 예민”
   function mapVolToAmp01(vRaw){
     const SILENT = 0.010;
     const KNEE   = 0.016;
 
-    const minAmp = 0.010; // tiny but visible
+    const minAmp = 0.010; // 무음일 때 “매우 작게”
     const maxAmp = 0.38;
 
     if (vRaw <= SILENT) return minAmp;
@@ -139,17 +139,16 @@
     const v = Math.round(clamp(amp01,0,1)*255);
     const i = headOffset % COLS;
     px[i*4+0] = v;
-    // g,b unused
     px[i*4+3] = 255;
   }
 
   function flushAmpTexture(){
     ampCtx.putImageData(img, 0, 0);
-    ampTex.source.update(); // <- update GPU copy
+    ampTex.source.update();
   }
 
   // -------------------------
-  // Shader (Filter)
+  // Silk shader filter
   // -------------------------
   const vertex = `
     in vec2 aPosition;
@@ -164,7 +163,6 @@
         vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
         position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
         position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
-
         return vec4(position, 0.0, 1.0);
     }
 
@@ -214,7 +212,7 @@
     void main(){
       vec2 uv = vTextureCoord;
 
-      // absolute rainbow: top red -> bottom violet
+      // 절대 그라데이션: 위=빨강, 아래=보라
       float hue = mix(0.0, 0.75, uv.y);
 
       float cols = uCols;
@@ -226,10 +224,7 @@
       float s = (idx + 0.5) / cols;
 
       float amp = texture2D(uAmpTex, vec2(s, 0.5)).r; // 0..1
-      float A = amp * 0.45;
-
-      float minA = 0.0025;
-      A = max(A, minA);
+      float A = max(amp * 0.45, 0.0025);
 
       float mid = uMidY;
       float dy = abs(uv.y - mid);
@@ -237,7 +232,7 @@
       float band = smoothstep(A, A - 0.004, dy);
       float silentGate = smoothstep(0.012, 0.020, amp);
 
-      // gentle flow / curvature (subtle)
+      // 미세 곡률/흐름(요동 아님: 아주 약한 광학적 흐름)
       float seed = hash11(idx + 7.13);
       float bendBase = (seed - 0.5) * 0.020;
       float bendWave = sin((uv.y * 20.0) + seed * 6.283) * 0.018;
@@ -276,7 +271,7 @@
       spec = clamp(spec, 0.0, 1.0);
 
       vec3 base = hsv2rgb(vec3(hue, 0.95, 1.0));
-      base = pow(base, vec3(0.78)); // punchier
+      base = pow(base, vec3(0.78)); // 더 선명
 
       vec3 ice = vec3(0.90, 0.98, 1.00);
       vec3 pink = vec3(1.00, 0.86, 0.98);
@@ -299,15 +294,13 @@
 
   let filter;
   try {
-    // Pixi v8 custom filter style: new Filter({ glProgram, resources })
-    const glProgram = (PIXI.GlProgram?.from)
-      ? PIXI.GlProgram.from({ vertex, fragment })
-      : new PIXI.GlProgram({ vertex, fragment });
+    // Pixi v8 가이드 스타일: Filter + GlProgram :contentReference[oaicite:3]{index=3}
+    const glProgram = new PIXI.GlProgram({ vertex, fragment });
 
     filter = new PIXI.Filter({
       glProgram,
       resources: {
-        // textures are resources: TextureSource
+        // sampler2D 이름(uAmpTex)과 동일한 리소스 키를 둠
         uAmpTex: ampTex.source,
         silkUniforms: {
           uRes:       { value: [app.renderer.width, app.renderer.height], type: "vec2<f32>" },
@@ -326,9 +319,7 @@
     return;
   }
 
-  // -------------------------
   // Resize
-  // -------------------------
   function onResize(){
     screen.width = app.renderer.width;
     screen.height = app.renderer.height;
@@ -338,14 +329,10 @@
   }
   window.addEventListener("resize", onResize, { passive:true });
 
-  // -------------------------
-  // Main loop
-  // -------------------------
+  // Loop
   let last = performance.now();
 
   app.ticker.add(() => {
-    if (!filter) return;
-
     const now = performance.now();
     const dt = Math.min(0.05, (now - last)/1000);
     last = now;
@@ -360,10 +347,7 @@
     smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
     const U = filter.resources.silkUniforms.uniforms;
-
-    // optical time only when running
     if(!paused) U.uTime += dt;
-
     if(paused) return;
 
     const stepPx = app.renderer.width / COLS;
@@ -385,18 +369,15 @@
     U.uHeadOffset = headOffset;
   });
 
-  // -------------------------
   // Controls
-  // -------------------------
   async function doStart(){
     if(started) return;
-    status("Start 클릭됨 → 마이크 시작 중…");
+    status("마이크 시작 중…");
 
     try {
       await startMic();
       started = true;
       paused = false;
-
       ui.style.display = "none";
       status("실행 중");
     } catch (e) {
@@ -405,15 +386,14 @@
     }
   }
 
-  // Start button (force)
   btnStart.onclick = async (e) => {
     e.preventDefault();
     e.stopPropagation();
+    status("Start 클릭됨");
     await doStart();
   };
 
-  // tap pause/resume after start (ignore when UI visible)
-  window.addEventListener("pointerdown", (e) => {
+  window.addEventListener("pointerdown", () => {
     if(!started) return;
     if(ui.style.display !== "none") return;
     paused = !paused;

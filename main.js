@@ -8,48 +8,76 @@
 
   const status = (t) => { if (statusEl) statusEl.textContent = t; };
   const showErr = (msg) => {
-    if (!errBox) { console.error(msg); return; }
+    console.error(msg);
+    if (!errBox) return;
     errBox.style.display = "block";
     errBox.textContent = String(msg);
   };
 
-  // 화면에 에러를 바로 표시
   window.addEventListener("error", (e) => showErr("JS Error:\n" + (e.error?.stack || e.message || e)));
   window.addEventListener("unhandledrejection", (e) => showErr("Promise Error:\n" + (e.reason?.stack || e.reason)));
 
   status("main.js 로드됨");
 
   if (!window.PIXI) {
-    showErr("PIXI 로드 실패: pixi.min.js(CDN) 로딩이 안 됐습니다.");
+    showErr("PIXI 로드 실패: pixi.min.js가 로딩되지 않았습니다(CDN 차단/네트워크).");
     status("PIXI 로드 실패");
     return;
   }
 
   // -------------------------
-  // ✅ Pixi v8 올바른 초기화 (핵심 수정)
-  // v8부터는 constructor에 옵션 넣지 말고, await app.init() 사용 :contentReference[oaicite:1]{index=1}
+  // ✅ Pixi v8 안전 초기화
   // -------------------------
   let app;
   try {
     app = new PIXI.Application();
-    await app.init({
-      resizeTo: window,
-      backgroundAlpha: 0,
-      antialias: true,
-      autoDensity: true,
-      resolution: Math.min(1.5, window.devicePixelRatio || 1),
-      powerPreference: "high-performance",
-    });
+
+    if (typeof app.init === "function") {
+      await app.init({
+        resizeTo: window,
+        backgroundAlpha: 0,
+        antialias: true,
+        autoDensity: true,
+        resolution: Math.min(1.5, window.devicePixelRatio || 1),
+        powerPreference: "high-performance",
+      });
+    } else {
+      // 혹시 구버전/다른 빌드가 섞였을 때 최소 동작 fallback
+      // (v8에서는 init가 있어야 정상)
+      showErr("PIXI.Application.init()가 없습니다. pixi 버전/빌드가 섞였을 가능성.");
+      status("PIXI init 없음");
+      return;
+    }
+
+    // ✅ 여기서 renderer가 없으면 이후 app.canvas 접근 시 바로 터짐
+    if (!app.renderer) {
+      showErr("Renderer 생성 실패: WebGL/WebGPU 초기화가 안 됐습니다(드라이버/브라우저 문제 가능).");
+      status("Renderer 실패");
+      return;
+    }
+
+    // ✅ 절대 app.canvas를 읽지 말고 renderer에서 캔버스를 꺼낸다 (핵심)
+    const canvas =
+      app.renderer?.canvas ||
+      app.renderer?.view ||
+      null;
+
+    if (!canvas) {
+      showErr("Renderer canvas/view를 찾지 못했습니다.");
+      status("Canvas 없음");
+      return;
+    }
+
+    stage.appendChild(canvas);
   } catch (e) {
-    showErr("PIXI Application init 실패:\n" + (e.stack || e));
-    status("렌더러 실패");
+    showErr("PIXI 초기화 실패:\n" + (e.stack || e));
+    status("PIXI 실패");
     return;
   }
 
-  // v8: app.canvas가 존재 :contentReference[oaicite:2]{index=2}
-  stage.appendChild(app.canvas);
-
-  // 필터 적용 대상(전체 화면)
+  // -------------------------
+  // Fullscreen sprite (filter target)
+  // -------------------------
   const screen = new PIXI.Sprite(PIXI.Texture.WHITE);
   screen.width = app.renderer.width;
   screen.height = app.renderer.height;
@@ -212,7 +240,6 @@
     void main(){
       vec2 uv = vTextureCoord;
 
-      // 절대 그라데이션: 위=빨강, 아래=보라
       float hue = mix(0.0, 0.75, uv.y);
 
       float cols = uCols;
@@ -223,7 +250,7 @@
       float idx = mod(col + uHeadOffset, cols);
       float s = (idx + 0.5) / cols;
 
-      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r; // 0..1
+      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r;
       float A = max(amp * 0.45, 0.0025);
 
       float mid = uMidY;
@@ -232,7 +259,6 @@
       float band = smoothstep(A, A - 0.004, dy);
       float silentGate = smoothstep(0.012, 0.020, amp);
 
-      // 미세 곡률/흐름(요동 아님: 아주 약한 광학적 흐름)
       float seed = hash11(idx + 7.13);
       float bendBase = (seed - 0.5) * 0.020;
       float bendWave = sin((uv.y * 20.0) + seed * 6.283) * 0.018;
@@ -271,7 +297,7 @@
       spec = clamp(spec, 0.0, 1.0);
 
       vec3 base = hsv2rgb(vec3(hue, 0.95, 1.0));
-      base = pow(base, vec3(0.78)); // 더 선명
+      base = pow(base, vec3(0.78));
 
       vec3 ice = vec3(0.90, 0.98, 1.00);
       vec3 pink = vec3(1.00, 0.86, 0.98);
@@ -294,14 +320,15 @@
 
   let filter;
   try {
-    // Pixi v8 가이드 스타일: Filter + GlProgram :contentReference[oaicite:3]{index=3}
-    const glProgram = new PIXI.GlProgram({ vertex, fragment });
+    const glProgram = (PIXI.GlProgram?.from)
+      ? PIXI.GlProgram.from({ vertex, fragment })
+      : new PIXI.GlProgram({ vertex, fragment });
 
-    filter = new PIXI.Filter({
+    // uAmpTex 리소스는 빌드/버전 차이로 Texture vs TextureSource가 다르게 요구될 수 있어서 2단계 방어
+    const makeFilter = (ampResource) => new PIXI.Filter({
       glProgram,
       resources: {
-        // sampler2D 이름(uAmpTex)과 동일한 리소스 키를 둠
-        uAmpTex: ampTex.source,
+        uAmpTex: ampResource,
         silkUniforms: {
           uRes:       { value: [app.renderer.width, app.renderer.height], type: "vec2<f32>" },
           uTime:      { value: 0.0, type: "f32" },
@@ -312,6 +339,12 @@
       }
     });
 
+    try {
+      filter = makeFilter(ampTex);          // 1) Texture로 시도
+    } catch {
+      filter = makeFilter(ampTex.source);   // 2) 안 되면 Source로
+    }
+
     screen.filters = [filter];
   } catch (e) {
     showErr("필터 생성 실패:\n" + (e.stack || e));
@@ -319,17 +352,14 @@
     return;
   }
 
-  // Resize
   function onResize(){
     screen.width = app.renderer.width;
     screen.height = app.renderer.height;
-
     const U = filter.resources.silkUniforms.uniforms;
     U.uRes = [app.renderer.width, app.renderer.height];
   }
   window.addEventListener("resize", onResize, { passive:true });
 
-  // Loop
   let last = performance.now();
 
   app.ticker.add(() => {
@@ -369,11 +399,9 @@
     U.uHeadOffset = headOffset;
   });
 
-  // Controls
   async function doStart(){
     if(started) return;
     status("마이크 시작 중…");
-
     try {
       await startMic();
       started = true;

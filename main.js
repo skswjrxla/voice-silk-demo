@@ -196,7 +196,9 @@
     uniform float uCols;
     uniform float uMidY;
 
-    float hash11(float p){
+    
+    uniform float uTime;
+float hash11(float p){
       p = fract(p * 0.1031);
       p *= p + 33.33;
       p *= p + p;
@@ -243,58 +245,58 @@
       float gate = smoothstep(0.006, 0.020, amp);
 
       float seed = hash11(col + 7.13);
-      float bendBase = (seed - 0.5) * 0.020;
-      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
-      float bend = (bendBase + bendWave) * (0.25 + 1.2*A);
+      float y = uv.y;
+      float anchor = pow(y, 1.65); // 0 at top, 1 at bottom (hanging thread)
+      float phase = seed * 6.283;
 
-      float x = (inCol - 0.5) + bend;
+      // Calm silk sway (very subtle, smooth, no "wave-like" wobble)
+      float sway1 = sin(uTime * 0.35 + phase + y * (2.2 + seed * 0.8)) * 0.006;
+      float sway2 = sin(uTime * 0.18 + phase * 1.7 + y * (5.4 + seed * 1.2)) * 0.003;
+      float calmSway = (sway1 + sway2) * anchor;
 
-      float core = 0.0;
+      // Extra bend only near the audio band, not the whole fiber
+      float localKick = band * gate * A * 0.020 * sin(uTime * 0.9 + phase + y * 10.0);
+
+      float x = (inCol - 0.5) + calmSway + localKick;
+float core = 0.0;
       float halo = 0.0;
-      float spec = 0.0;
 
-      // ✅ 6 -> 4 (성능)
-      for(int k=0;k<4;k++){
+      // Two sub-strands max (silk-like, not rope-like)
+      for(int k=0;k<2;k++){
         float fk = float(k);
-        float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
+        float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.06;
         float d = x - off;
-
-        core += gauss(d, 0.030);
-        halo += gauss(d, 0.090);
-
-        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
-        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
-        spec += s1 * mix(0.95, 1.35, streak);
+        core += gauss(d, 0.020);
+        halo += gauss(d, 0.060);
       }
-
-      core = clamp(core, 0.0, 1.0);
+core = clamp(core, 0.0, 1.0);
       halo = clamp(halo, 0.0, 1.0);
-      spec = clamp(spec, 0.0, 1.0);
+      // Wave rainbow (only on the overlapped segment)
+      vec3 base = hsv2rgb(vec3(hue, 0.90, 1.0));
+      base = pow(base, vec3(0.72)); // softer, less neon
 
-      // 보석처럼 쨍하게
-      vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0));
-      base = pow(base, vec3(0.58));
-      base *= 1.55;
-
-      vec3 ice  = vec3(0.92, 0.99, 1.00);
-      vec3 pink = vec3(1.00, 0.86, 0.98);
-
-      float alphaWave = band * (0.18 + 0.92*gate);
+      // Silk / glass whites
+      vec3 ice  = vec3(0.92, 0.985, 1.00);
+      vec3 warm = vec3(1.00, 0.92, 0.98);
+float alphaWave = band * (0.18 + 0.92*gate);
       float alphaCalm = calm * 0.10;
       float alpha = max(alphaCalm, alphaWave);
 
       vec3 rgbWave = base * (0.76*core + 0.30*halo);
-      rgbWave += ice  * (1.35 * spec);
       rgbWave += pink * (0.10 * halo);
       rgbWave = clamp(rgbWave, 0.0, 1.6);
 
       vec3 rgbCalm = vec3(0.92, 0.98, 1.00);
 
-      // amp 작으면 calm, 커지면 wave
-      float mixWave = gate;
+      // Subtle silk sheen moving slowly along the thread
+      // no derivatives: approximate sheen as a thin ribbon near the core
+      float sheenMask = smoothstep(0.055, 0.0, abs(x));
+      float sheenWave = 0.5 + 0.5 * sin(uTime * 0.55 + phase + uv.y * 6.0);
+      rgbCalm += ice * (0.09 * sheenMask * sheenWave);
+// Only the segment touched by the travelling band becomes rainbow
+      float mixWave = clamp(band * (0.75 + 0.35 * gate), 0.0, 1.0);
       vec3 rgb = mix(rgbCalm, rgbWave, mixWave);
-
-      float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
+float a = alpha * clamp(0.80*core + 0.55*halo, 0.0, 1.0);
       a = max(a, alphaCalm * 0.35);
 
       gl_FragColor = vec4(rgb, a);
@@ -336,7 +338,9 @@
     uniform float uCols;
     uniform float uMidY;
 
-    out vec4 FragColor;
+    
+    uniform float uTime;
+out vec4 FragColor;
 
     float hash11(float p){
       p = fract(p * 0.1031);
@@ -379,16 +383,21 @@
       float gate = smoothstep(0.006, 0.020, amp);
 
       float seed = hash11(col + 7.13);
-      float bendBase = (seed - 0.5) * 0.020;
-      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
-      float bend = (bendBase + bendWave) * (0.25 + 1.2*A);
+      float y = uv.y;
+      float anchor = pow(y, 1.65); // 0 at top, 1 at bottom (hanging thread)
+      float phase = seed * 6.283;
 
-      float x = (inCol - 0.5) + bend;
+      // Calm silk sway (very subtle, smooth, no "wave-like" wobble)
+      float sway1 = sin(uTime * 0.35 + phase + y * (2.2 + seed * 0.8)) * 0.006;
+      float sway2 = sin(uTime * 0.18 + phase * 1.7 + y * (5.4 + seed * 1.2)) * 0.003;
+      float calmSway = (sway1 + sway2) * anchor;
 
-      float core = 0.0;
+      // Extra bend only near the audio band, not the whole fiber
+      float localKick = band * gate * A * 0.020 * sin(uTime * 0.9 + phase + y * 10.0);
+
+      float x = (inCol - 0.5) + calmSway + localKick;
+float core = 0.0;
       float halo = 0.0;
-      float spec = 0.0;
-
       for(int k=0;k<4;k++){
         float fk = float(k);
         float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
@@ -396,16 +405,10 @@
 
         core += gauss(d, 0.030);
         halo += gauss(d, 0.090);
-
-        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
-        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
-        spec += s1 * mix(0.95, 1.35, streak);
       }
 
       core = clamp(core, 0.0, 1.0);
       halo = clamp(halo, 0.0, 1.0);
-      spec = clamp(spec, 0.0, 1.0);
-
       vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0));
       base = pow(base, vec3(0.58));
       base *= 1.55;
@@ -418,16 +421,20 @@
       float alpha = max(alphaCalm, alphaWave);
 
       vec3 rgbWave = base * (0.76*core + 0.30*halo);
-      rgbWave += ice  * (1.35 * spec);
       rgbWave += pink * (0.10 * halo);
       rgbWave = clamp(rgbWave, 0.0, 1.6);
 
       vec3 rgbCalm = vec3(0.92, 0.98, 1.00);
 
-      float mixWave = gate;
+      // Subtle silk sheen moving slowly along the thread
+      // no derivatives: approximate sheen as a thin ribbon near the core
+      float sheenMask = smoothstep(0.055, 0.0, abs(x));
+      float sheenWave = 0.5 + 0.5 * sin(uTime * 0.55 + phase + uv.y * 6.0);
+      rgbCalm += ice * (0.09 * sheenMask * sheenWave);
+float mixWave = gate;
       vec3 rgb = mix(rgbCalm, rgbWave, mixWave);
 
-      float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
+      float a = alpha * clamp(0.80*core + 0.55*halo, 0.0, 1.0);
       a = max(a, alphaCalm * 0.35);
 
       FragColor = vec4(rgb, a);
@@ -453,6 +460,7 @@
         silkUniforms: {
           uCols: { value: COLS, type: "f32" },
           uMidY: { value: 0.54, type: "f32" },
+          uTime: { value: 0.0, type: "f32" },
         }
       }
     });
@@ -481,6 +489,11 @@
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
 
+
+    // update time uniform even when not started (subtle silk motion)
+    const U = filter.resources.silkUniforms.uniforms;
+    U.uTime = now * 0.001;
+
     if (!started) {
       if (pill) pill.textContent = `Press Start (WebGL${isWebGL2 ? 2 : 1})`;
       return;
@@ -506,9 +519,7 @@
       px[i * 4 + 3] = 255;
     }
     flushAmpTexture();
-
     // uniforms
-    const U = filter.resources.silkUniforms.uniforms;
     U.uCols = COLS;
   });
 

@@ -17,11 +17,8 @@
   window.addEventListener("error", (e) => showErr("JS Error:\n" + (e.error?.stack || e.message || e)));
   window.addEventListener("unhandledrejection", (e) => showErr("Promise Error:\n" + (e.reason?.stack || e.reason)));
 
-  status("main.js 로드됨");
-
   if (!window.PIXI) {
     showErr("PIXI 로드 실패: pixi.min.js CDN이 로딩되지 않았습니다.");
-    status("PIXI 로드 실패");
     return;
   }
 
@@ -45,39 +42,36 @@
     stage.appendChild(canvas);
   } catch (e) {
     showErr("PIXI 초기화 실패:\n" + (e.stack || e));
-    status("PIXI 실패");
     return;
   }
 
-  // WebGL2 여부 확인 (여기에 따라 GLSL1/3 선택)
+  // WebGL2 체크 (GLSL3 / GLSL1 자동 선택)
   const gl = app.renderer?.gl;
   const isWebGL2 = (typeof WebGL2RenderingContext !== "undefined") && (gl instanceof WebGL2RenderingContext);
 
-  // -------------------------
-  // Fullscreen sprite (filter target)
-  // -------------------------
+  // full screen target sprite
   const screen = new PIXI.Sprite(PIXI.Texture.WHITE);
   screen.width = app.renderer.width;
   screen.height = app.renderer.height;
   app.stage.addChild(screen);
 
   // -------------------------
-  // Audio RMS
+  // Audio
   // -------------------------
   let audioCtx = null, analyser = null, stream = null, data = null;
   let started = false;
   let paused = false;
   let smVol = 0;
 
-  const clamp = (x,a,b) => Math.max(a, Math.min(b, x));
-  const lerp  = (a,b,t) => a + (b-a)*t;
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const lerp = (a, b, t) => a + (b - a) * t;
 
-  async function startMic(){
+  async function startMic() {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     await audioCtx.resume();
 
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
     });
 
     const src = audioCtx.createMediaStreamSource(stream);
@@ -85,25 +79,24 @@
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.55;
     src.connect(analyser);
-
     data = new Uint8Array(analyser.fftSize);
   }
 
-  function rms(){
-    if(!analyser || !data) return 0;
+  function rms() {
+    if (!analyser || !data) return 0;
     analyser.getByteTimeDomainData(data);
     let sum = 0;
-    for(let i=0;i<data.length;i++){
-      const v = (data[i]-128)/128;
-      sum += v*v;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v * v;
     }
-    return clamp(Math.sqrt(sum/data.length), 0, 1);
+    return clamp(Math.sqrt(sum / data.length), 0, 1);
   }
 
   // -------------------------
   // Amp texture (1px canvas -> texture)
   // -------------------------
-  // ✅ 렉 줄이기: COLS 1024 -> 640
+  // ✅ 렉 줄이기: 1024 -> 640
   const COLS = 640;
 
   const ampCanvas = document.createElement("canvas");
@@ -112,34 +105,35 @@
   const ampCtx = ampCanvas.getContext("2d");
 
   const img = ampCtx.createImageData(COLS, 1);
-  const px  = img.data;
-  for(let i=0;i<COLS;i++){
-    px[i*4+0]=0; px[i*4+1]=0; px[i*4+2]=0; px[i*4+3]=255;
+  const px = img.data;
+  for (let i = 0; i < COLS; i++) {
+    px[i * 4 + 0] = 0;
+    px[i * 4 + 1] = 0;
+    px[i * 4 + 2] = 0;
+    px[i * 4 + 3] = 255;
   }
   ampCtx.putImageData(img, 0, 0);
 
   const ampTex = PIXI.Texture.from(ampCanvas);
-
-  function flushAmpTexture(){
+  function flushAmpTexture() {
     ampCtx.putImageData(img, 0, 0);
     ampTex.source.update();
   }
 
   // -------------------------
-  // ✅ "선이 선을 밀어서 전달" 전파 버퍼
+  // ✅ "밀어서 전달" 전파 버퍼
   // -------------------------
   const ampF = new Float32Array(COLS);
 
-  // 튜닝값
-  const PUSH  = 0.93;   // 밀림 강도
+  const PUSH = 0.93;    // 밀림
   const DECAY = 0.986;  // 잔상
-  const RATE  = 220;    // 전달 속도(초당 스텝)
-  const AMP_SCALE = 1.85; // 진폭 크게
+  const RATE = 220;     // 전달 속도
+  const AMP_SCALE = 1.85;
 
-  function propagateAmp(inputAmp01, steps){
-    for(let s=0; s<steps; s++){
-      for(let i=COLS-1; i>=1; i--){
-        ampF[i] = ampF[i]*DECAY + ampF[i-1]*PUSH;
+  function propagateAmp(inputAmp01, steps) {
+    for (let s = 0; s < steps; s++) {
+      for (let i = COLS - 1; i >= 1; i--) {
+        ampF[i] = ampF[i] * DECAY + ampF[i - 1] * PUSH;
         if (ampF[i] > 1) ampF[i] = 1;
         if (ampF[i] < 0) ampF[i] = 0;
       }
@@ -147,16 +141,16 @@
     }
   }
 
-  // 무음은 거의 안 보이고, 조금만 말해도 예민하게 반응
-  function mapVolToAmp01(vRaw){
+  // ✅ 무음이면 0, 조금만 소리나도 매우 예민
+  function mapVolToAmp01(vRaw) {
     const SILENT = 0.0022;
-    const KNEE   = 0.0042;
+    const KNEE = 0.0042;
     if (vRaw <= SILENT) return 0.0;
 
     let x = (vRaw - KNEE) / (1 - KNEE);
     x = clamp(x, 0, 1);
 
-    const gain  = 22.0;
+    const gain = 22.0;
     const gamma = 0.14;
 
     const y = Math.pow(clamp(x * gain, 0, 1), gamma);
@@ -164,10 +158,10 @@
   }
 
   // -------------------------
-  // ✅ Shader sources (GLSL1 + GLSL3)
-  // - 무음일 때는 "얌전한 가로선 1개"만
-  // - 파동은 A가 임계값 넘을 때만 등장
-  // - 렉 줄이기: strands loop 6 -> 4
+  // Shaders (GLSL1 / GLSL3)
+  // - 무음: 얌전한 가로선 1개만
+  // - 파동: A가 임계 이상일 때만 등장
+  // - 루프 4개로 성능 개선
   // -------------------------
   const VERT_GLSL1 = `
     attribute vec2 aPosition;
@@ -177,21 +171,18 @@
     uniform vec4 uOutputFrame;
     uniform vec4 uOutputTexture;
 
-    vec4 filterVertexPosition( void )
-    {
+    vec4 filterVertexPosition(void){
       vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
       position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
       position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
       return vec4(position, 0.0, 1.0);
     }
 
-    vec2 filterTextureCoord( void )
-    {
+    vec2 filterTextureCoord(void){
       return aPosition * (uOutputFrame.zw * uInputSize.zw);
     }
 
-    void main(void)
-    {
+    void main(void){
       gl_Position = filterVertexPosition();
       vTextureCoord = filterTextureCoord();
     }
@@ -225,7 +216,7 @@
     void main(){
       vec2 uv = vTextureCoord;
 
-      // 상단 red -> 하단 violet
+      // 상단 red(0.0) -> 하단 violet(0.75)
       float hue = mix(0.0, 0.75, uv.y);
 
       float cols = uCols;
@@ -233,27 +224,24 @@
       float col = floor(fx);
       float inCol = fract(fx);
 
-      // 화면 x 고정 샘플링
+      // x 고정 샘플링
       float s = (col + 0.5) / cols;
       float amp = texture2D(uAmpTex, vec2(s, 0.5)).r;
 
       float mid = uMidY;
       float dy = abs(uv.y - mid);
 
-      // ✅ 무음일 때 파동 밴드 제거 (바닥값 제거)
+      // ✅ 무음이면 밴드 0
       float A = amp * ${AMP_SCALE.toFixed(2)};
       float band = 0.0;
-      if (A > 0.0012) {
-        band = smoothstep(A, A - 0.014, dy);
-      }
+      if (A > 0.0012) band = smoothstep(A, A - 0.014, dy);
 
-      // ✅ 무음일 때 얌전한 가로선 1개
+      // ✅ 얌전한 가로선
       float calm = smoothstep(0.006, 0.0, dy);
 
-      // ✅ 게이트를 더 엄격하게(잡음 억제)
+      // ✅ 게이트(잡음 억제)
       float gate = smoothstep(0.006, 0.020, amp);
 
-      // 실 결 고정 + 미세 곡률(요동 X)
       float seed = hash11(col + 7.13);
       float bendBase = (seed - 0.5) * 0.020;
       float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
@@ -261,11 +249,11 @@
 
       float x = (inCol - 0.5) + bend;
 
-      // 섬유 코어/헤일로/스펙 (✅ 루프 4로 감소)
       float core = 0.0;
       float halo = 0.0;
       float spec = 0.0;
 
+      // ✅ 6 -> 4 (성능)
       for(int k=0;k<4;k++){
         float fk = float(k);
         float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
@@ -291,12 +279,10 @@
       vec3 ice  = vec3(0.92, 0.99, 1.00);
       vec3 pink = vec3(1.00, 0.86, 0.98);
 
-      // ✅ 파동 알파 + 얌전선 알파 합성
       float alphaWave = band * (0.18 + 0.92*gate);
       float alphaCalm = calm * 0.10;
       float alpha = max(alphaCalm, alphaWave);
 
-      // 색/하이라이트는 파동에만 강하게(얌전선은 거의 흰빛)
       vec3 rgbWave = base * (0.76*core + 0.30*halo);
       rgbWave += ice  * (1.35 * spec);
       rgbWave += pink * (0.10 * halo);
@@ -304,11 +290,11 @@
 
       vec3 rgbCalm = vec3(0.92, 0.98, 1.00);
 
-      float mixWave = smoothstep(0.006, 0.020, amp); // amp 작으면 calm쪽
+      // amp 작으면 calm, 커지면 wave
+      float mixWave = gate;
       vec3 rgb = mix(rgbCalm, rgbWave, mixWave);
 
       float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
-      // calm일 때도 얌전선이 보이도록 최소 알파 반영
       a = max(a, alphaCalm * 0.35);
 
       gl_FragColor = vec4(rgb, a);
@@ -325,21 +311,18 @@
     uniform vec4 uOutputFrame;
     uniform vec4 uOutputTexture;
 
-    vec4 filterVertexPosition( void )
-    {
+    vec4 filterVertexPosition(void){
       vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
       position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
       position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
       return vec4(position, 0.0, 1.0);
     }
 
-    vec2 filterTextureCoord( void )
-    {
+    vec2 filterTextureCoord(void){
       return aPosition * (uOutputFrame.zw * uInputSize.zw);
     }
 
-    void main(void)
-    {
+    void main(void){
       gl_Position = filterVertexPosition();
       vTextureCoord = filterTextureCoord();
     }
@@ -390,9 +373,7 @@
 
       float A = amp * ${AMP_SCALE.toFixed(2)};
       float band = 0.0;
-      if (A > 0.0012) {
-        band = smoothstep(A, A - 0.014, dy);
-      }
+      if (A > 0.0012) band = smoothstep(A, A - 0.014, dy);
 
       float calm = smoothstep(0.006, 0.0, dy);
       float gate = smoothstep(0.006, 0.020, amp);
@@ -443,7 +424,7 @@
 
       vec3 rgbCalm = vec3(0.92, 0.98, 1.00);
 
-      float mixWave = smoothstep(0.006, 0.020, amp);
+      float mixWave = gate;
       vec3 rgb = mix(rgbCalm, rgbWave, mixWave);
 
       float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
@@ -454,7 +435,7 @@
   `;
 
   // -------------------------
-  // Build filter (choose shader version)
+  // Build filter
   // -------------------------
   let filter;
   try {
@@ -482,15 +463,13 @@
     screen.filters = [filter];
   } catch (e) {
     showErr("필터 생성/컴파일 실패:\n" + (e.stack || e));
-    status("필터 실패");
     return;
   }
 
-  function onResize(){
+  window.addEventListener("resize", () => {
     screen.width = app.renderer.width;
     screen.height = app.renderer.height;
-  }
-  window.addEventListener("resize", onResize, { passive:true });
+  }, { passive: true });
 
   // -------------------------
   // Ticker
@@ -499,38 +478,36 @@
 
   app.ticker.add(() => {
     const now = performance.now();
-    const dt = Math.min(0.05, (now - last)/1000);
+    const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
 
-    if(!started){
-      if (pill) pill.textContent = `Press Start (WebGL${isWebGL2?2:1})`;
+    if (!started) {
+      if (pill) pill.textContent = `Press Start (WebGL${isWebGL2 ? 2 : 1})`;
       return;
     }
-
     if (pill) pill.textContent = paused ? "Paused · tap to resume" : "Running · tap to pause";
     if (paused) return;
 
     const v = rms();
     smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
-    // 전파 (밀어서 전달)
     const steps = Math.max(1, Math.floor(dt * RATE));
     let amp01 = mapVolToAmp01(smVol);
 
-    // ✅ 잡음 컷(무음인데 미세 파동 뜨는 것 방지)
+    // ✅ 잡음 컷(무음인데 미세 반응 방지)
     if (amp01 < 0.02) amp01 = 0.0;
 
     propagateAmp(amp01, steps);
 
-    // ampF -> 1px texture
-    for(let i=0;i<COLS;i++){
+    // ampF -> texture (R 채널에 0~255)
+    for (let i = 0; i < COLS; i++) {
       const vv = Math.round(clamp(ampF[i], 0, 1) * 255);
-      px[i*4 + 0] = vv;
-      px[i*4 + 3] = 255;
+      px[i * 4 + 0] = vv;
+      px[i * 4 + 3] = 255;
     }
     flushAmpTexture();
 
-    // uniforms update
+    // uniforms
     const U = filter.resources.silkUniforms.uniforms;
     U.uCols = COLS;
   });
@@ -538,8 +515,8 @@
   // -------------------------
   // Controls
   // -------------------------
-  async function doStart(){
-    if(started) return;
+  async function doStart() {
+    if (started) return;
     status("마이크 시작 중…");
     try {
       await startMic();
@@ -560,9 +537,9 @@
   };
 
   window.addEventListener("pointerdown", () => {
-    if(!started) return;
-    if(ui && ui.style.display !== "none") return;
+    if (!started) return;
+    if (ui && ui.style.display !== "none") return;
     paused = !paused;
-  }, { passive:true });
+  }, { passive: true });
 
 })();

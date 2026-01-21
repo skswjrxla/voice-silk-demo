@@ -23,7 +23,7 @@
   }
 
   // -------------------------
-  // Pixi v8 init
+  // Pixi v8 init (mobile friendly)
   // -------------------------
   let app;
   try {
@@ -33,7 +33,8 @@
       backgroundAlpha: 0,
       antialias: true,
       autoDensity: true,
-      resolution: Math.min(1.5, window.devicePixelRatio || 1),
+      // ✅ 모바일 과부하 방지: DPR 과도하게 올리지 않음
+      resolution: Math.min(1.25, window.devicePixelRatio || 1),
       powerPreference: "high-performance",
     });
 
@@ -45,33 +46,32 @@
     return;
   }
 
-  // WebGL2 체크 (GLSL3 / GLSL1 자동 선택)
+  // WebGL2 여부 (GLSL3 / GLSL1 자동 선택)
   const gl = app.renderer?.gl;
   const isWebGL2 = (typeof WebGL2RenderingContext !== "undefined") && (gl instanceof WebGL2RenderingContext);
 
-  // full screen target sprite
+  // full screen sprite
   const screen = new PIXI.Sprite(PIXI.Texture.WHITE);
   screen.width = app.renderer.width;
   screen.height = app.renderer.height;
   app.stage.addChild(screen);
 
   // -------------------------
-  // Audio
+  // Audio (RMS) + threshold trigger (clear boundary)
   // -------------------------
   let audioCtx = null, analyser = null, stream = null, data = null;
   let started = false;
   let paused = false;
-  let smVol = 0;
 
-  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-  const lerp = (a, b, t) => a + (b - a) * t;
+  const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
+  const lerp  = (a,b,t)=>a+(b-a)*t;
 
-  async function startMic() {
+  async function startMic(){
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     await audioCtx.resume();
 
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
     });
 
     const src = audioCtx.createMediaStreamSource(stream);
@@ -79,89 +79,61 @@
     analyser.fftSize = 1024;
     analyser.smoothingTimeConstant = 0.55;
     src.connect(analyser);
+
     data = new Uint8Array(analyser.fftSize);
   }
 
-  function rms() {
-    if (!analyser || !data) return 0;
+  function rms(){
+    if(!analyser || !data) return 0;
     analyser.getByteTimeDomainData(data);
-    let sum = 0;
-    for (let i = 0; i < data.length; i++) {
-      const v = (data[i] - 128) / 128;
-      sum += v * v;
+    let sum=0;
+    for(let i=0;i<data.length;i++){
+      const v=(data[i]-128)/128;
+      sum += v*v;
     }
-    return clamp(Math.sqrt(sum / data.length), 0, 1);
+    return clamp(Math.sqrt(sum/data.length),0,1);
+  }
+
+  // ✅ 임계값 경계 명확 + 작은 소리 무시
+  let smVol = 0;
+  let noiseFloor = 0.002;   // 천천히 추정
+  let armed = true;         // 히스테리시스(연속 트리거 방지)
+  let cooldown = 0;
+
+  // 트리거 파동(단발)
+  let waveActive = 0;
+  let waveX = -1;     // 0..1 진행
+  let waveAmp = 0;    // 0..1
+  const WAVE_SPEED = 0.95;   // 화면을 가로지르는 속도(초당)
+  const WAVE_WIDTH = 0.12;   // 파동 폭(uv)
+
+  function computeThreshold(){
+    // noiseFloor 기준 + 충분히 큰 마진 => “수준 이상의 소리만”
+    const dynamic = noiseFloor + 0.015;
+    return Math.max(0.020, dynamic);  // 하한 0.02 (작은소리 무시)
+  }
+
+  function triggerWave(vol, thr){
+    // vol이 thr보다 얼마나 큰지에 따라 amplitude 결정
+    const over = clamp((vol - thr) / 0.08, 0, 1);
+    waveAmp = 0.055 + 0.12 * over; // 시각적으로 충분히
+    waveX = 0.0;
+    waveActive = 1.0;
+    cooldown = 0.20; // 200ms 쿨다운
   }
 
   // -------------------------
-  // Amp texture (1px canvas -> texture)
+  // Fiber density (auto)
   // -------------------------
-  // ✅ 렉 줄이기: 1024 -> 640
-  const COLS = 640;
-
-  const ampCanvas = document.createElement("canvas");
-  ampCanvas.width = COLS;
-  ampCanvas.height = 1;
-  const ampCtx = ampCanvas.getContext("2d");
-
-  const img = ampCtx.createImageData(COLS, 1);
-  const px = img.data;
-  for (let i = 0; i < COLS; i++) {
-    px[i * 4 + 0] = 0;
-    px[i * 4 + 1] = 0;
-    px[i * 4 + 2] = 0;
-    px[i * 4 + 3] = 255;
-  }
-  ampCtx.putImageData(img, 0, 0);
-
-  const ampTex = PIXI.Texture.from(ampCanvas);
-  function flushAmpTexture() {
-    ampCtx.putImageData(img, 0, 0);
-    ampTex.source.update();
+  function computeFibersCount(){
+    const w = app.renderer.width;
+    // 대략 10~14px 간격 느낌
+    const n = Math.round(w / 12);
+    return clamp(n, 70, 140);
   }
 
   // -------------------------
-  // ✅ "밀어서 전달" 전파 버퍼
-  // -------------------------
-  const ampF = new Float32Array(COLS);
-
-  const PUSH = 0.93;    // 밀림
-  const DECAY = 0.986;  // 잔상
-  const RATE = 220;     // 전달 속도
-  const AMP_SCALE = 1.85;
-
-  function propagateAmp(inputAmp01, steps) {
-    for (let s = 0; s < steps; s++) {
-      for (let i = COLS - 1; i >= 1; i--) {
-        ampF[i] = ampF[i] * DECAY + ampF[i - 1] * PUSH;
-        if (ampF[i] > 1) ampF[i] = 1;
-        if (ampF[i] < 0) ampF[i] = 0;
-      }
-      ampF[0] = inputAmp01;
-    }
-  }
-
-  // ✅ 무음이면 0, 조금만 소리나도 매우 예민
-  function mapVolToAmp01(vRaw) {
-    const SILENT = 0.0022;
-    const KNEE = 0.0042;
-    if (vRaw <= SILENT) return 0.0;
-
-    let x = (vRaw - KNEE) / (1 - KNEE);
-    x = clamp(x, 0, 1);
-
-    const gain = 22.0;
-    const gamma = 0.14;
-
-    const y = Math.pow(clamp(x * gain, 0, 1), gamma);
-    return clamp(y, 0, 1);
-  }
-
-  // -------------------------
-  // Shaders (GLSL1 / GLSL3)
-  // - 무음: 얌전한 가로선 1개만
-  // - 파동: A가 임계 이상일 때만 등장
-  // - 루프 4개로 성능 개선
+  // Shaders: procedural fibers + beads + wave intersection rainbow
   // -------------------------
   const VERT_GLSL1 = `
     attribute vec2 aPosition;
@@ -185,119 +157,6 @@
     void main(void){
       gl_Position = filterVertexPosition();
       vTextureCoord = filterTextureCoord();
-    }
-  `;
-
-  const FRAG_GLSL1 = `
-    precision highp float;
-    varying vec2 vTextureCoord;
-
-    uniform sampler2D uAmpTex;
-    uniform float uCols;
-    uniform float uMidY;
-
-    float hash11(float p){
-      p = fract(p * 0.1031);
-      p *= p + 33.33;
-      p *= p + p;
-      return fract(p);
-    }
-
-    vec3 hsv2rgb(vec3 c){
-      vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
-      vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-      return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-    }
-
-    float gauss(float x, float s){
-      return exp(-(x*x)/(2.0*s*s));
-    }
-
-    void main(){
-      vec2 uv = vTextureCoord;
-
-      // 상단 red(0.0) -> 하단 violet(0.75)
-      float hue = mix(0.0, 0.75, uv.y);
-
-      float cols = uCols;
-      float fx = uv.x * cols;
-      float col = floor(fx);
-      float inCol = fract(fx);
-
-      // x 고정 샘플링
-      float s = (col + 0.5) / cols;
-      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r;
-
-      float mid = uMidY;
-      float dy = abs(uv.y - mid);
-
-      // ✅ 무음이면 밴드 0
-      float A = amp * ${AMP_SCALE.toFixed(2)};
-      float band = 0.0;
-      if (A > 0.0012) band = smoothstep(A, A - 0.014, dy);
-
-      // ✅ 얌전한 가로선
-      float calm = smoothstep(0.006, 0.0, dy);
-
-      // ✅ 게이트(잡음 억제)
-      float gate = smoothstep(0.006, 0.020, amp);
-
-      float seed = hash11(col + 7.13);
-      float bendBase = (seed - 0.5) * 0.020;
-      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
-      float bend = (bendBase + bendWave) * (0.25 + 1.2*A);
-
-      float x = (inCol - 0.5) + bend;
-
-      float core = 0.0;
-      float halo = 0.0;
-      float spec = 0.0;
-
-      // ✅ 6 -> 4 (성능)
-      for(int k=0;k<4;k++){
-        float fk = float(k);
-        float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
-        float d = x - off;
-
-        core += gauss(d, 0.030);
-        halo += gauss(d, 0.090);
-
-        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
-        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
-        spec += s1 * mix(0.95, 1.35, streak);
-      }
-
-      core = clamp(core, 0.0, 1.0);
-      halo = clamp(halo, 0.0, 1.0);
-      spec = clamp(spec, 0.0, 1.0);
-
-      // 보석처럼 쨍하게
-      vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0));
-      base = pow(base, vec3(0.58));
-      base *= 1.55;
-
-      vec3 ice  = vec3(0.92, 0.99, 1.00);
-      vec3 pink = vec3(1.00, 0.86, 0.98);
-
-      float alphaWave = band * (0.18 + 0.92*gate);
-      float alphaCalm = calm * 0.10;
-      float alpha = max(alphaCalm, alphaWave);
-
-      vec3 rgbWave = base * (0.76*core + 0.30*halo);
-      rgbWave += ice  * (1.35 * spec);
-      rgbWave += pink * (0.10 * halo);
-      rgbWave = clamp(rgbWave, 0.0, 1.6);
-
-      vec3 rgbCalm = vec3(0.92, 0.98, 1.00);
-
-      // amp 작으면 calm, 커지면 wave
-      float mixWave = gate;
-      vec3 rgb = mix(rgbCalm, rgbWave, mixWave);
-
-      float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
-      a = max(a, alphaCalm * 0.35);
-
-      gl_FragColor = vec4(rgb, a);
     }
   `;
 
@@ -328,16 +187,22 @@
     }
   `;
 
-  const FRAG_GLSL3 = `#version 300 es
+  // --- Common fragment body as a template (GLSL1/3 wrapper differs)
+  const FRAG_BODY = `
     precision highp float;
 
-    in vec2 vTextureCoord;
-    uniform sampler2D uAmpTex;
-    uniform float uCols;
+    // uniforms
+    uniform float uTime;
+    uniform float uFibers;
+    uniform float uAspect;
+
+    uniform float uWaveActive;
+    uniform float uWaveX;
+    uniform float uWaveAmp;
+    uniform float uWaveW;
     uniform float uMidY;
 
-    out vec4 FragColor;
-
+    // small hash
     float hash11(float p){
       p = fract(p * 0.1031);
       p *= p + 33.33;
@@ -351,91 +216,143 @@
       return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
     }
 
-    float gauss(float x, float s){
-      return exp(-(x*x)/(2.0*s*s));
+    // slightly angular hump (tri-ish but soft)
+    float angularHump(float u){
+      float t = max(0.0, 1.0 - abs(u));       // triangle
+      float s = t*t*(3.0 - 2.0*t);            // smoothstep-like
+      return mix(t, s, 0.55);                 // 조금 각져있되 부드럽게
     }
 
-    void main(){
-      vec2 uv = vTextureCoord;
+    void shade(in vec2 uv, out vec3 outRGB, out float outA){
+      // cell space for fibers
+      float fibers = uFibers;
+      float cell = uv.x * fibers;
+      float fi = floor(cell);
+      float fx = fract(cell) - 0.5; // -0.5..0.5
 
-      float hue = mix(0.0, 0.75, uv.y);
+      float seed = hash11(fi * 17.13 + 3.7);
 
-      float cols = uCols;
-      float fx = uv.x * cols;
-      float col = floor(fx);
-      float inCol = fract(fx);
+      // gentle sway (very subtle)
+      float sway = sin(uTime*0.35 + fi*0.12 + seed*6.283) * 0.05;  // cell units
+      float curve = sin(uv.y*6.0 + seed*6.283 + uTime*0.18) * 0.06;
+      float xoff = (sway + curve) * (0.25 + 0.75*(1.0-uv.y)); // 상단은 덜, 하단은 조금 더
 
-      float s = (col + 0.5) / cols;
-      float amp = texture(uAmpTex, vec2(s, 0.5)).r;
+      float dx = abs(fx + xoff);
 
-      float mid = uMidY;
-      float dy = abs(uv.y - mid);
+      // fiber thickness (cell units)
+      float core = smoothstep(0.090, 0.0, dx);      // 얇은 실
+      float halo = smoothstep(0.220, 0.090, dx);    // 주변 은은한 빛
 
-      float A = amp * ${AMP_SCALE.toFixed(2)};
-      float band = 0.0;
-      if (A > 0.0012) band = smoothstep(A, A - 0.014, dy);
+      // base fiber color (icy glass)
+      vec3 baseA = vec3(0.90, 0.97, 1.00);
+      vec3 baseB = vec3(0.99, 0.92, 0.98);
+      vec3 base = mix(baseA, baseB, seed*0.35);
+      base *= 1.02;
 
-      float calm = smoothstep(0.006, 0.0, dy);
-      float gate = smoothstep(0.006, 0.020, amp);
-
-      float seed = hash11(col + 7.13);
-      float bendBase = (seed - 0.5) * 0.020;
-      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
-      float bend = (bendBase + bendWave) * (0.25 + 1.2*A);
-
-      float x = (inCol - 0.5) + bend;
-
-      float core = 0.0;
-      float halo = 0.0;
-      float spec = 0.0;
-
-      for(int k=0;k<4;k++){
+      // beads: 3 per fiber
+      float beadA = 0.0;
+      vec3 beadRGB = vec3(0.0);
+      for(int k=0;k<3;k++){
         float fk = float(k);
-        float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
-        float d = x - off;
+        float by = 0.18 + 0.64 * hash11(fi*9.73 + fk*33.1 + 1.7);
+        // bead center slightly follows fiber offset
+        float dy = (uv.y - by);
+        float dxN = (fx + xoff) / fibers;     // normalize x
+        float d = length(vec2(dxN, dy * 0.55)); // oval-ish
+        float r = 0.010 + 0.004*hash11(fi*4.1 + fk*8.9); // radius
+        float bead = smoothstep(r, r-0.006, d);
+        if(bead > 0.0){
+          float h = pow(clamp(1.0 - d/r, 0.0, 1.0), 3.5);
+          float spec = pow(clamp(1.0 - d/r, 0.0, 1.0), 14.0);
+          vec3 ice = vec3(0.95, 0.995, 1.0);
+          vec3 tint = mix(vec3(1.0,0.92,0.98), vec3(0.88,0.98,1.0), hash11(fi+fk));
+          beadRGB += (ice*(0.65*h) + vec3(1.0)*1.2*spec) * tint * bead;
+          beadA = max(beadA, bead * (0.55 + 0.35*h));
+        }
+      }
+      beadRGB = clamp(beadRGB, 0.0, 2.0);
 
-        core += gauss(d, 0.030);
-        halo += gauss(d, 0.090);
+      // ---- Wave intersection coloring (only where wave touches fibers)
+      float waveBand = 0.0;
+      float waveY = uMidY;
 
-        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
-        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
-        spec += s1 * mix(0.95, 1.35, streak);
+      if(uWaveActive > 0.5){
+        float u = (uv.x - uWaveX) / uWaveW;
+        float hump = angularHump(u);
+        // single pulse shape (no oscillation)
+        waveY = uMidY + (uWaveAmp * hump) * (sin(uv.x*3.1415)*0.15 + 0.85); // 아주 살짝 각/흐름만
+        float dist = abs(uv.y - waveY);
+        // band thickness slightly depends on amp (bigger sound => thicker band)
+        float bw = 0.020 + 0.050 * uWaveAmp;
+        waveBand = smoothstep(bw, bw-0.010, dist);
       }
 
-      core = clamp(core, 0.0, 1.0);
-      halo = clamp(halo, 0.0, 1.0);
-      spec = clamp(spec, 0.0, 1.0);
+      // only paint on fiber presence (core/halo)
+      float fiberMask = clamp(core + 0.55*halo, 0.0, 1.0);
+      float paint = waveBand * smoothstep(0.08, 0.26, fiberMask);
 
-      vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0));
-      base = pow(base, vec3(0.58));
-      base *= 1.55;
+      // rainbow vertical gradient (top red -> bottom violet)
+      float hue = mix(0.0, 0.75, uv.y);
+      vec3 rainbow = hsv2rgb(vec3(hue, 1.0, 1.0));
+      // jewel punch
+      rainbow = pow(rainbow, vec3(0.58)) * 1.65;
 
-      vec3 ice  = vec3(0.92, 0.99, 1.00);
-      vec3 pink = vec3(1.00, 0.86, 0.98);
+      // mix base <-> rainbow only at intersection
+      vec3 fiberRGB = base * (0.35*halo + 0.65*core);
+      fiberRGB += vec3(1.0) * (0.35*halo); // glass glow
 
-      float alphaWave = band * (0.18 + 0.92*gate);
-      float alphaCalm = calm * 0.10;
-      float alpha = max(alphaCalm, alphaWave);
+      // highlight spec along painted region
+      float sparkle = paint * (0.18 + 0.82*pow(fiberMask, 1.6));
+      vec3 painted = mix(fiberRGB, rainbow, paint);
+      painted += vec3(1.0, 1.0, 1.0) * (0.9 * sparkle);
 
-      vec3 rgbWave = base * (0.76*core + 0.30*halo);
-      rgbWave += ice  * (1.35 * spec);
-      rgbWave += pink * (0.10 * halo);
-      rgbWave = clamp(rgbWave, 0.0, 1.6);
+      // also tint beads if wave passes them (only local)
+      float beadPaint = waveBand * beadA;
+      vec3 beadFinal = mix(beadRGB, rainbow * 1.05 + vec3(1.0)*0.6, beadPaint);
 
-      vec3 rgbCalm = vec3(0.92, 0.98, 1.00);
+      // final composite
+      vec3 rgb = painted * fiberMask;
+      rgb += beadFinal;
+      rgb = clamp(rgb, 0.0, 3.0);
 
-      float mixWave = gate;
-      vec3 rgb = mix(rgbCalm, rgbWave, mixWave);
+      float a = 0.0;
+      // base fiber alpha (subtle but visible)
+      a += (0.14*halo + 0.22*core);
+      // beads
+      a = max(a, beadA * 0.55);
+      // wave makes it pop
+      a += paint * 0.28;
+      a = clamp(a, 0.0, 0.92);
 
-      float a = alpha * clamp(0.80*core + 0.55*halo + 0.95*spec, 0.0, 1.0);
-      a = max(a, alphaCalm * 0.35);
+      outRGB = rgb;
+      outA = a;
+    }
+  `;
 
+  const FRAG_GLSL1 = `
+    varying vec2 vTextureCoord;
+    ${FRAG_BODY}
+    void main(){
+      vec3 rgb; float a;
+      shade(vTextureCoord, rgb, a);
+      gl_FragColor = vec4(rgb, a);
+    }
+  `;
+
+  const FRAG_GLSL3 = `#version 300 es
+    precision highp float;
+    in vec2 vTextureCoord;
+    out vec4 FragColor;
+    ${FRAG_BODY}
+    void main(){
+      vec3 rgb; float a;
+      shade(vTextureCoord, rgb, a);
       FragColor = vec4(rgb, a);
     }
   `;
 
   // -------------------------
-  // Build filter
+  // Build filter (robust for Pixi v8)
   // -------------------------
   let filter;
   try {
@@ -446,19 +363,21 @@
       ? PIXI.GlProgram.from({ vertex, fragment })
       : new PIXI.GlProgram({ vertex, fragment });
 
-    const makeFilter = (ampResource) => new PIXI.Filter({
+    filter = new PIXI.Filter({
       glProgram,
       resources: {
-        uAmpTex: ampResource,
-        silkUniforms: {
-          uCols: { value: COLS, type: "f32" },
-          uMidY: { value: 0.54, type: "f32" },
+        u: {
+          uTime:       { value: 0,    type: "f32" },
+          uFibers:     { value: computeFibersCount(), type: "f32" },
+          uAspect:     { value: (app.renderer.width / Math.max(1, app.renderer.height)), type: "f32" },
+          uWaveActive: { value: 0,    type: "f32" },
+          uWaveX:      { value: -1,   type: "f32" },
+          uWaveAmp:    { value: 0,    type: "f32" },
+          uWaveW:      { value: WAVE_WIDTH, type: "f32" },
+          uMidY:       { value: 0.54, type: "f32" },
         }
       }
     });
-
-    try { filter = makeFilter(ampTex); }
-    catch { filter = makeFilter(ampTex.source); }
 
     screen.filters = [filter];
   } catch (e) {
@@ -466,10 +385,14 @@
     return;
   }
 
-  window.addEventListener("resize", () => {
+  function syncSize(){
     screen.width = app.renderer.width;
     screen.height = app.renderer.height;
-  }, { passive: true });
+    const U = filter.resources.u.uniforms;
+    U.uFibers = computeFibersCount();
+    U.uAspect = app.renderer.width / Math.max(1, app.renderer.height);
+  }
+  window.addEventListener("resize", syncSize, { passive:true });
 
   // -------------------------
   // Ticker
@@ -481,41 +404,67 @@
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
 
+    // update time always (even before start) => base sway visible
+    const U = filter.resources.u.uniforms;
+    U.uTime += dt;
+
     if (!started) {
-      if (pill) pill.textContent = `Press Start (WebGL${isWebGL2 ? 2 : 1})`;
+      if (pill) pill.textContent = `Idle (WebGL${isWebGL2 ? 2 : 1}) · Press Start`;
+      // keep wave off
+      U.uWaveActive = 0;
       return;
     }
-    if (pill) pill.textContent = paused ? "Paused · tap to resume" : "Running · tap to pause";
+
+    if (pill) pill.textContent = paused ? "Paused · tap to resume" : "Running · (loud voice triggers one wave)";
     if (paused) return;
 
+    // cooldown
+    cooldown = Math.max(0, cooldown - dt);
+
+    // RMS
     const v = rms();
     smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
-    const steps = Math.max(1, Math.floor(dt * RATE));
-    let amp01 = mapVolToAmp01(smVol);
-
-    // ✅ 잡음 컷(무음인데 미세 반응 방지)
-    if (amp01 < 0.02) amp01 = 0.0;
-
-    propagateAmp(amp01, steps);
-
-    // ampF -> texture (R 채널에 0~255)
-    for (let i = 0; i < COLS; i++) {
-      const vv = Math.round(clamp(ampF[i], 0, 1) * 255);
-      px[i * 4 + 0] = vv;
-      px[i * 4 + 3] = 255;
+    // noiseFloor: only update when below a small cap (quiet times)
+    if (smVol < 0.010) {
+      noiseFloor = lerp(noiseFloor, smVol, 0.02);
+      noiseFloor = clamp(noiseFloor, 0.0005, 0.010);
     }
-    flushAmpTexture();
 
-    // uniforms
-    const U = filter.resources.silkUniforms.uniforms;
-    U.uCols = COLS;
+    const thr = computeThreshold();
+    const low = Math.max(noiseFloor + 0.006, thr * 0.55); // re-arm threshold
+
+    // hysteresis / arming
+    if (smVol < low) armed = true;
+
+    // trigger only when clearly loud
+    if (armed && cooldown <= 0 && smVol > thr) {
+      triggerWave(smVol, thr);
+      armed = false;
+    }
+
+    // advance wave
+    if (waveActive > 0.5) {
+      waveX += dt * WAVE_SPEED;
+      if (waveX > 1.20) {
+        waveActive = 0.0;
+        waveX = -1.0;
+        waveAmp = 0.0;
+      }
+    }
+
+    // push uniforms
+    U.uWaveActive = waveActive;
+    U.uWaveX = waveX;
+    U.uWaveAmp = waveAmp;
+    U.uWaveW = WAVE_WIDTH;
+    U.uMidY = 0.54;
   });
 
   // -------------------------
   // Controls
   // -------------------------
-  async function doStart() {
+  async function doStart(){
     if (started) return;
     status("마이크 시작 중…");
     try {
@@ -536,10 +485,11 @@
     await doStart();
   };
 
+  // tap to pause/resume after started
   window.addEventListener("pointerdown", () => {
     if (!started) return;
     if (ui && ui.style.display !== "none") return;
     paused = !paused;
-  }, { passive: true });
+  }, { passive:true });
 
 })();

@@ -1,26 +1,52 @@
 (() => {
-  const stage = document.getElementById("stage");
   const ui = document.getElementById("ui");
   const btnStart = document.getElementById("btnStart");
   const statusEl = document.getElementById("status");
   const pill = document.getElementById("pill");
+  const errBox = document.getElementById("err");
+  const stage = document.getElementById("stage");
 
-  const status = (t) => statusEl.textContent = t;
+  const status = (t) => { if (statusEl) statusEl.textContent = t; };
+  const showErr = (msg) => {
+    errBox.style.display = "block";
+    errBox.textContent = String(msg);
+  };
+
+  // --- Always surface errors on screen ---
+  window.addEventListener("error", (e) => showErr("JS Error:\n" + (e.error?.stack || e.message || e)));
+  window.addEventListener("unhandledrejection", (e) => showErr("Promise Error:\n" + (e.reason?.stack || e.reason)));
+
+  status("main.js 로드됨");
+
+  // Pixi not loaded => Start will never work
+  if (!window.PIXI) {
+    showErr("PIXI 로드 실패: CDN이 차단되었거나 네트워크 문제입니다.\n(DevTools > Network에서 pixi.min.js 확인)");
+    status("PIXI 로드 실패");
+    return;
+  }
 
   // -------------------------
   // Pixi App (transparent)
   // -------------------------
-  const app = new PIXI.Application({
-    resizeTo: window,
-    backgroundAlpha: 0,
-    antialias: true,
-    powerPreference: "high-performance",
-    autoDensity: true,
-    resolution: Math.min(1.5, window.devicePixelRatio || 1),
-  });
+  let app;
+  try {
+    app = new PIXI.Application({
+      resizeTo: window,
+      backgroundAlpha: 0,
+      antialias: true,
+      powerPreference: "high-performance",
+      autoDensity: true,
+      resolution: Math.min(1.5, window.devicePixelRatio || 1),
+    });
+  } catch (e) {
+    showErr("PIXI Application 생성 실패:\n" + (e.stack || e));
+    status("렌더러 실패");
+    return;
+  }
+
   stage.appendChild(app.canvas);
 
-  // Fullscreen white sprite as filter target
+  // Fullscreen sprite (filter target)
   const screen = new PIXI.Sprite(PIXI.Texture.WHITE);
   screen.anchor.set(0);
   screen.width = app.renderer.width;
@@ -31,6 +57,8 @@
   // Audio RMS
   // -------------------------
   let audioCtx = null, analyser = null, stream = null, data = null;
+  let started = false;
+  let paused = false;
   let smVol = 0;
 
   const clamp = (x,a,b) => Math.max(a, Math.min(b, x));
@@ -47,8 +75,9 @@
     const src = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.62; // 예민하게
+    analyser.smoothingTimeConstant = 0.62;
     src.connect(analyser);
+
     data = new Uint8Array(analyser.fftSize);
   }
 
@@ -64,64 +93,63 @@
   }
 
   // -------------------------
-  // Ring-buffer amplitude texture (1D)
+  // Amp ring texture (Canvas 1px-high, super stable)
   // -------------------------
-  const COLS = 1024;            // columns across width
-  const ampRGBA = new Uint8Array(COLS * 4);
+  const COLS = 1024;
+
+  const ampCanvas = document.createElement("canvas");
+  ampCanvas.width = COLS;
+  ampCanvas.height = 1;
+  const ampCtx = ampCanvas.getContext("2d", { willReadFrequently: true });
+
+  const img = ampCtx.createImageData(COLS, 1);
+  const px = img.data; // Uint8ClampedArray length = COLS*4
   for(let i=0;i<COLS;i++){
-    ampRGBA[i*4+0] = 0;   // R: amp
-    ampRGBA[i*4+1] = 0;
-    ampRGBA[i*4+2] = 0;
-    ampRGBA[i*4+3] = 255; // A
+    px[i*4+0]=0; px[i*4+1]=0; px[i*4+2]=0; px[i*4+3]=255;
   }
+  ampCtx.putImageData(img, 0, 0);
 
-  const ampTex = PIXI.Texture.fromBuffer(ampRGBA, COLS, 1, {
-    scaleMode: PIXI.SCALE_MODES.NEAREST,
-  });
+  // Pixi v8: Texture.from(canvas) OK. (resource is texture.source)
+  const ampTex = PIXI.Texture.from(ampCanvas);
 
-  let headOffset = 0;           // which amp index is currently at screen col 0
-  let scrollPx = 0;             // accumulated pixels for stepping
-  const speedPx = 520;          // wave move speed px/sec (screen space)
+  let headOffset = 0;
+  let scrollPx = 0;
+  const speedPx = 520;
 
-  // Mapping: "무음일 때 매우 작게", "조금만 커져도 급격히 반응"
+  // “무음은 매우 작게”, “조금만 커져도 매우 예민”
   function mapVolToAmp01(vRaw){
-    // vRaw: RMS 0..1 (대개 0.00~0.10 영역에서 놀음)
-
-    // 완전 무음 근처에서도 "아주 작게"
     const SILENT = 0.010;
-    const minAmp = 0.010; // 화면 높이 대비 최소 진폭(= 매우 작게)
+    const KNEE   = 0.016;
 
-    // 조금만 소리 나도 확 반응 시작
-    const KNEE = 0.016;
-
-    if(vRaw <= SILENT) return minAmp;
-
-    // knee 이후를 강하게 확장
-    const x = clamp((vRaw - KNEE) / (1 - KNEE), 0, 1);
-
-    // 민감도 핵심(조절 포인트)
-    const gain = 11.0;       // 더 예민: 9~14
-    const gamma = 0.20;      // 더 예민: 0.18~0.30 (낮을수록 민감)
-
-    const y = Math.pow(clamp(x * gain, 0, 1), gamma);
-
-    // 큰 소리에서 너무 과하면 0.38~0.42로 낮추기
+    const minAmp = 0.010; // tiny but visible
     const maxAmp = 0.38;
 
+    if (vRaw <= SILENT) return minAmp;
+
+    const x = clamp((vRaw - KNEE) / (1 - KNEE), 0, 1);
+
+    const gain  = 11.0;  // 더 예민: 13~15
+    const gamma = 0.20;  // 더 예민: 0.16~0.22
+
+    const y = Math.pow(clamp(x * gain, 0, 1), gamma);
     return minAmp + y * (maxAmp - minAmp);
   }
 
   function writeAmpAtHead(amp01){
-    const v = Math.round(clamp(amp01,0,1) * 255);
+    const v = Math.round(clamp(amp01,0,1)*255);
     const i = headOffset % COLS;
-    ampRGBA[i*4+0] = v;
-    ampRGBA[i*4+1] = 0;
-    ampRGBA[i*4+2] = 0;
-    ampRGBA[i*4+3] = 255;
+    px[i*4+0] = v;
+    // g,b unused
+    px[i*4+3] = 255;
+  }
+
+  function flushAmpTexture(){
+    ampCtx.putImageData(img, 0, 0);
+    ampTex.source.update(); // <- update GPU copy
   }
 
   // -------------------------
-  // “Hair / Silk” shader as Pixi Filter
+  // Shader (Filter)
   // -------------------------
   const vertex = `
     in vec2 aPosition;
@@ -152,14 +180,13 @@
     }
   `;
 
-  // Fragment: procedural silky strands + anisotropic highlight (vertical tangent)
   const fragment = `
     precision highp float;
 
     in vec2 vTextureCoord;
 
-    uniform sampler2D uTexture;   // Pixi input (unused)
-    uniform sampler2D uAmpTex;    // 1D amp ring texture
+    uniform sampler2D uTexture;
+    uniform sampler2D uAmpTex;
 
     uniform vec2  uRes;
     uniform float uTime;
@@ -167,7 +194,6 @@
     uniform float uHeadOffset;
     uniform float uMidY;
 
-    // hash
     float hash11(float p){
       p = fract(p * 0.1031);
       p *= p + 33.33;
@@ -176,7 +202,6 @@
     }
 
     vec3 hsv2rgb(vec3 c){
-      // c.x: hue 0..1
       vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
       vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
       return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
@@ -187,69 +212,57 @@
     }
 
     void main(){
-      vec2 uv = vTextureCoord; // 0..1
-      // absolute rainbow: top red -> bottom violet (270deg)
+      vec2 uv = vTextureCoord;
+
+      // absolute rainbow: top red -> bottom violet
       float hue = mix(0.0, 0.75, uv.y);
 
-      // column id across screen
       float cols = uCols;
       float fx = uv.x * cols;
       float col = floor(fx);
-      float inCol = fract(fx); // 0..1 within column step
+      float inCol = fract(fx);
 
-      // ring index mapping: screen col0 corresponds to headOffset
       float idx = mod(col + uHeadOffset, cols);
-
-      // sample amp (0..1) from 1D texture
       float s = (idx + 0.5) / cols;
-      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r; // 0..1
-      // amp is stored in 0..1 already? (we store 0..255 -> sampler returns 0..1)
-      // Convert to normalized amp in UV space (relative to screen height)
-      float A = amp * 0.45; // scale in shader; tune if needed
 
-      // very small at silence still visible, but tiny
+      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r; // 0..1
+      float A = amp * 0.45;
+
       float minA = 0.0025;
       A = max(A, minA);
 
-      // vertical bounds around mid
       float mid = uMidY;
       float dy = abs(uv.y - mid);
 
-      // if outside amplitude band, alpha 0
-      float band = smoothstep(A, A - 0.004, dy); // inside=1, outside=0
-
-      // if nearly nothing, fade away (keeps "very small" but still subtle)
+      float band = smoothstep(A, A - 0.004, dy);
       float silentGate = smoothstep(0.012, 0.020, amp);
 
-      // ---- slight hair flow / curvature (static-ish + tiny optical drift)
+      // gentle flow / curvature (subtle)
       float seed = hash11(idx + 7.13);
       float bendBase = (seed - 0.5) * 0.020;
       float bendWave = sin((uv.y * 20.0) + seed * 6.283) * 0.018;
-      float bendTime = sin(uTime * 0.35 + seed * 9.0) * 0.006; // optical, subtle
+      float bendTime = sin(uTime * 0.35 + seed * 9.0) * 0.006;
       float bend = (bendBase + bendWave + bendTime) * (0.25 + 1.2*A);
 
-      // shift "inCol" center by bend => gentle curve
       float x = (inCol - 0.5) + bend;
 
-      // ---- multiple micro-strands per column (hair bundle)
       float core = 0.0;
       float halo = 0.0;
       float spec = 0.0;
 
-      // 3 strands in a column
       for(int k=0;k<3;k++){
         float fk = float(k);
-        float off = (hash11(idx*3.1 + fk*12.7) - 0.5) * 0.18; // within column
-        float wCore = 0.050; // thin core
-        float wHalo = 0.120; // soft glow
+        float off = (hash11(idx*3.1 + fk*12.7) - 0.5) * 0.18;
+
+        float wCore = 0.050;
+        float wHalo = 0.120;
+
         float d = x - off;
 
         float c = gauss(d, wCore);
         float h = gauss(d, wHalo);
 
-        // anisotropic highlight: very tight around center, boosted
         float s1 = pow(clamp(1.0 - abs(d)/0.07, 0.0, 1.0), 12.0);
-        // add “silk spec streak” that varies along y (gives hair feel)
         float streak = 0.55 + 0.45*sin(uv.y*70.0 + seed*9.0 + fk*4.0);
         s1 *= mix(0.85, 1.25, streak);
 
@@ -258,166 +271,152 @@
         spec += s1;
       }
 
-      // normalize
       core = clamp(core, 0.0, 1.0);
       halo = clamp(halo, 0.0, 1.0);
       spec = clamp(spec, 0.0, 1.0);
 
-      // ---- color: jewel rainbow + ice highlights + slight chromatic edge
       vec3 base = hsv2rgb(vec3(hue, 0.95, 1.0));
-      // boost “gem” contrast
       base = pow(base, vec3(0.78)); // punchier
 
-      // ice-white highlight and tiny chroma aberration
       vec3 ice = vec3(0.90, 0.98, 1.00);
       vec3 pink = vec3(1.00, 0.86, 0.98);
 
-      // intensity
       float alpha = band * (0.14 + 0.86 * silentGate);
 
-      // compose: core is sharper, halo is softer
       vec3 colRGB = base * (0.55*core + 0.35*halo);
-
-      // spec is “screen-ish”
-      colRGB += ice * (0.95 * spec);
+      colRGB += ice  * (0.95 * spec);
       colRGB += pink * (0.12 * halo);
 
-      // extra “silk depth”: darken edges slightly
       float edge = smoothstep(0.60, 0.15, abs(inCol - 0.5));
       colRGB *= (0.90 + 0.10*edge);
 
-      // final alpha: thin hair + glow
       float a = alpha * clamp(0.55*core + 0.45*halo + 0.65*spec, 0.0, 1.0);
-
-      // clamp outside band
       a *= band;
 
-      // output premultiplied-ish look: keep strong color
       gl_FragColor = vec4(colRGB, a);
     }
   `;
 
   let filter;
-try {
-  filter = new PIXI.Filter({
-    glProgram: new PIXI.GlProgram({ vertex, fragment }),
-    resources: {
-      uAmpTex: ampTex,          // <-- 여기 중요
-      silkUniforms: {
-        uRes:        { value: [app.renderer.width, app.renderer.height], type: 'vec2<f32>' },
-        uTime:       { value: 0.0, type: 'f32' },
-        uCols:       { value: COLS, type: 'f32' },
-        uHeadOffset: { value: 0.0, type: 'f32' },
-        uMidY:       { value: 0.54, type: 'f32' },
+  try {
+    // Pixi v8 custom filter style: new Filter({ glProgram, resources })
+    const glProgram = (PIXI.GlProgram?.from)
+      ? PIXI.GlProgram.from({ vertex, fragment })
+      : new PIXI.GlProgram({ vertex, fragment });
+
+    filter = new PIXI.Filter({
+      glProgram,
+      resources: {
+        // textures are resources: TextureSource
+        uAmpTex: ampTex.source,
+        silkUniforms: {
+          uRes:       { value: [app.renderer.width, app.renderer.height], type: "vec2<f32>" },
+          uTime:      { value: 0.0, type: "f32" },
+          uCols:      { value: COLS, type: "f32" },
+          uHeadOffset:{ value: 0.0, type: "f32" },
+          uMidY:      { value: 0.54, type: "f32" },
+        }
       }
-    }
-  });
+    });
 
-  screen.filters = [filter];
-
-} catch (e) {
-  console.error(e);
-  status("렌더러/필터 에러(콘솔 확인)");
-}
-
-
-  // Blend: add a bit of luminous feel
-  screen.filters = [filter];
+    screen.filters = [filter];
+  } catch (e) {
+    showErr("필터 생성 실패:\n" + (e.stack || e));
+    status("필터 실패");
+    return;
+  }
 
   // -------------------------
-  // Resize handling
+  // Resize
   // -------------------------
   function onResize(){
     screen.width = app.renderer.width;
     screen.height = app.renderer.height;
-    filter.resources.silkUniforms.uniforms.uRes[0] = app.renderer.width;
-    filter.resources.silkUniforms.uniforms.uRes[1] = app.renderer.height;
+
+    const U = filter.resources.silkUniforms.uniforms;
+    U.uRes = [app.renderer.width, app.renderer.height];
   }
   window.addEventListener("resize", onResize, { passive:true });
 
   // -------------------------
-  // Control: start / tap pause-resume
+  // Main loop
   // -------------------------
-  let started = false;
-  let paused = false;
-
-  // update loop
   let last = performance.now();
 
   app.ticker.add(() => {
+    if (!filter) return;
+
     const now = performance.now();
-    const dt = Math.min(0.05, (now - last) / 1000);
+    const dt = Math.min(0.05, (now - last)/1000);
     last = now;
 
-    // UI pill
     if(!started){
       pill.textContent = "Press Start";
-    } else {
-      pill.textContent = paused ? "Paused · tap to resume" : "Running · tap to pause";
+      return;
     }
+    pill.textContent = paused ? "Paused · tap to resume" : "Running · tap to pause";
 
-    if(!started) return;
-
-    // sample audio even if paused (so resume is instant), but don't advance wave if paused
     const v = rms();
     smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
-    // time uniform (optical subtle)
     const U = filter.resources.silkUniforms.uniforms;
-    U.uTime += paused ? 0.0 : (dt);
+
+    // optical time only when running
+    if(!paused) U.uTime += dt;
 
     if(paused) return;
 
-    // advance ring by pixel speed -> column steps
     const stepPx = app.renderer.width / COLS;
     scrollPx += speedPx * dt;
 
-    // how many new columns entered
     const steps = Math.floor(scrollPx / stepPx);
-    if(steps > 0){
-      scrollPx -= steps * stepPx;
+    if(steps <= 0) return;
 
-      // compute current amp
-      const amp01 = mapVolToAmp01(smVol);
+    scrollPx -= steps * stepPx;
 
-      // write multiple steps (if frame lag)
-      for(let k=0;k<steps;k++){
-        headOffset = (headOffset + 1) % COLS;
-        writeAmpAtHead(amp01);
-      }
+    const amp01 = mapVolToAmp01(smVol);
 
-      ampTex.source.update();
-      U.uHeadOffset = headOffset;
+    for(let k=0;k<steps;k++){
+      headOffset = (headOffset + 1) % COLS;
+      writeAmpAtHead(amp01);
     }
+
+    flushAmpTexture();
+    U.uHeadOffset = headOffset;
   });
 
+  // -------------------------
+  // Controls
+  // -------------------------
   async function doStart(){
     if(started) return;
-    status("마이크 시작 중…");
-    try{
+    status("Start 클릭됨 → 마이크 시작 중…");
+
+    try {
       await startMic();
       started = true;
       paused = false;
+
       ui.style.display = "none";
       status("실행 중");
-    }catch(e){
-      console.error(e);
+    } catch (e) {
+      showErr("마이크 실패:\n" + (e.stack || e));
       status("마이크 실패: HTTPS/권한 확인");
     }
   }
 
-  btnStart.addEventListener("click", (e) => {
+  // Start button (force)
+  btnStart.onclick = async (e) => {
     e.preventDefault();
     e.stopPropagation();
-    doStart();
-  });
+    await doStart();
+  };
 
-  // Tap anywhere toggles pause/resume AFTER start (UI가 닫힌 뒤)
+  // tap pause/resume after start (ignore when UI visible)
   window.addEventListener("pointerdown", (e) => {
     if(!started) return;
-    if(ui.style.display !== "none") return; // start overlay visible -> ignore
+    if(ui.style.display !== "none") return;
     paused = !paused;
   }, { passive:true });
 
 })();
-

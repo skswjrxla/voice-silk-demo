@@ -6,53 +6,59 @@
   <title>Voice Silk</title>
   <style>
     :root{
-      --bg0:#080912;
-      --bg1:#0a0b16;
-      --txt:#e8e8ff;
+      --txt:#0d1020;
+      --sub:#2a2f46;
     }
-    html,body{margin:0;height:100%;background:linear-gradient(180deg,var(--bg0),var(--bg1));overflow:hidden;}
+    html,body{margin:0;height:100%;overflow:hidden;background:#f4f6ff;}
     canvas{display:block;width:100vw;height:100vh;touch-action:none;}
     .ui{
       position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
-      background: radial-gradient(1000px 600px at 50% 35%, rgba(255,255,255,.06), rgba(0,0,0,.65));
-      color:var(--txt); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: radial-gradient(900px 520px at 50% 30%, rgba(255,255,255,.80), rgba(240,242,255,.40));
       padding:24px; text-align:center;
     }
     .card{
-      width:min(520px, 92vw);
-      border-radius:18px;
+      width:min(560px, 92vw);
+      border-radius:20px;
       padding:18px 16px 16px;
-      background: rgba(255,255,255,.06);
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255,255,255,.10);
-      box-shadow: 0 20px 60px rgba(0,0,0,.35);
+      background: rgba(255,255,255,.55);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid rgba(30,40,80,.10);
+      box-shadow: 0 18px 60px rgba(10,18,40,.12);
+      color:var(--txt);
     }
-    .title{font-size:18px;font-weight:700;letter-spacing:.2px;margin:0 0 8px;}
-    .desc{font-size:13px;opacity:.85;line-height:1.5;margin:0 0 14px;}
+    .title{font-size:18px;font-weight:800;letter-spacing:.2px;margin:0 0 8px;}
+    .desc{font-size:13px;color:var(--sub);line-height:1.5;margin:0 0 14px;}
     .row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
     button{
       appearance:none;border:0; cursor:pointer;
       padding:12px 14px;border-radius:14px;
-      background: rgba(255,255,255,.12);
-      color: var(--txt); font-weight:650;
-      border: 1px solid rgba(255,255,255,.14);
-      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+      background: rgba(255,255,255,.68);
+      color: var(--txt); font-weight:750;
+      border: 1px solid rgba(20,30,60,.12);
+      box-shadow: 0 10px 26px rgba(10,18,40,.10);
     }
     button:active{transform: translateY(1px);}
-    .small{margin-top:10px;font-size:12px;opacity:.75;line-height:1.45;}
+    .small{margin-top:10px;font-size:12px;color:rgba(15,20,40,.72);line-height:1.45;}
     .badge{
       display:inline-block;margin-top:10px;
       padding:6px 10px;border-radius:999px;
-      background: rgba(255,255,255,.08);
-      border:1px solid rgba(255,255,255,.10);
-      font-size:12px;opacity:.85;
+      background: rgba(255,255,255,.60);
+      border:1px solid rgba(20,30,60,.10);
+      font-size:12px;color:rgba(15,20,40,.72);
     }
     .topHint{
       position:fixed; left:12px; top:10px; z-index:5;
-      color:rgba(232,232,255,.82);
+      color:rgba(15,20,40,.72);
       font:12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      opacity:.85; user-select:none;
-      text-shadow: 0 2px 10px rgba(0,0,0,.45);
+      user-select:none;
+      padding:8px 10px;
+      border-radius:999px;
+      background: rgba(255,255,255,.55);
+      border: 1px solid rgba(20,30,60,.10);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 8px 22px rgba(10,18,40,.10);
     }
   </style>
 </head>
@@ -64,8 +70,8 @@
     <div class="card">
       <p class="title">Voice Silk</p>
       <p class="desc">
-        소리가 들리면 왼쪽에서 시작한 파동이 오른쪽으로 흐릅니다.<br/>
-        진폭은 음량에 반응하고, 색은 등장 순간 고정됩니다.
+        소리가 들리면 왼쪽에서 시작한 파형이 오른쪽으로 흐릅니다.<br/>
+        파형은 촘촘한 실크 섬유(얇은 선)로 표현되며, 위는 빨강/아래는 보라 무지개 그라데이션입니다.
       </p>
       <div class="row">
         <button id="btnMic">마이크로 시작</button>
@@ -95,7 +101,7 @@
   let bgCtx = bgCanvas.getContext("2d", { alpha: false });
 
   function resize(){
-    DPR = Math.min(2, window.devicePixelRatio || 1); // 폰 최적화
+    DPR = Math.min(2, window.devicePixelRatio || 1);
     W = Math.floor(innerWidth * DPR);
     H = Math.floor(innerHeight * DPR);
     canvas.width = W; canvas.height = H;
@@ -105,7 +111,7 @@
     bgCanvas.width = W;
     bgCanvas.height = H;
 
-    buildSilkBackground();
+    buildGlassSilkBackground();
   }
   addEventListener("resize", resize, { passive:true });
   resize();
@@ -114,7 +120,6 @@
   const clamp = (x,a,b)=>Math.max(a, Math.min(b,x));
   const lerp = (a,b,t)=>a+(b-a)*t;
 
-  // cheap smooth noise
   function smoothNoise(t){
     return (
       Math.sin(t*0.7)*0.55 +
@@ -123,33 +128,55 @@
     );
   }
 
-  // ---------- Silk background (procedural fibers) ----------
-  function buildSilkBackground(){
-    // base gradient
+  // ---------- Background: frosted glass + silk fibers ----------
+  function buildGlassSilkBackground(){
+    // soft glass base
     const g = bgCtx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, "#070813");
-    g.addColorStop(1, "#0a0b16");
+    g.addColorStop(0, "#fbfcff");
+    g.addColorStop(0.50, "#f3f6ff");
+    g.addColorStop(1, "#eef2ff");
     bgCtx.fillStyle = g;
     bgCtx.fillRect(0,0,W,H);
 
-    // subtle “fiber” strokes
+    // subtle iridescent blobs (glass sheen)
     bgCtx.save();
     bgCtx.globalCompositeOperation = "screen";
-    bgCtx.lineCap = "round";
+    for(let i=0;i<6;i++){
+      const cx = (0.15 + Math.random()*0.7) * W;
+      const cy = (0.15 + Math.random()*0.7) * H;
+      const r1 = (0.18 + Math.random()*0.22) * Math.min(W,H);
+      const r2 = r1 * (1.4 + Math.random()*0.7);
+      const grad = bgCtx.createRadialGradient(cx,cy,r1*0.2, cx,cy,r2);
+      grad.addColorStop(0, `rgba(255,255,255,0.35)`);
+      grad.addColorStop(0.45, `rgba(220,235,255,0.14)`);
+      grad.addColorStop(1, `rgba(255,255,255,0)`);
+      bgCtx.fillStyle = grad;
+      bgCtx.beginPath();
+      bgCtx.ellipse(cx,cy,r2*0.95,r2*0.70, Math.random()*Math.PI, 0, Math.PI*2);
+      bgCtx.fill();
+    }
+    bgCtx.restore();
 
-    const fiberCount = Math.floor((W*H)/(22000*DPR)); // 모바일 안전
+    // silk-like faint fibers
+    bgCtx.save();
+    bgCtx.globalCompositeOperation = "multiply";
+    bgCtx.lineCap = "round";
+    bgCtx.lineJoin = "round";
+
+    const fiberCount = Math.floor((W*H)/(18000*DPR)); // 은은하지만 촘촘
     for(let i=0;i<fiberCount;i++){
       const u = Math.random();
       const v = Math.random();
-      const x0 = W*(u*1.2-0.1);
-      const y0 = H*(v*1.2-0.1);
 
-      const len = (0.45 + Math.random()*0.75) * Math.max(W,H);
-      const ang = (Math.random()*0.35 - 0.175) + (Math.PI*0.06); // 살짝 기울어진 실크 결
+      const x0 = W*(u*1.18-0.09);
+      const y0 = H*(v*1.18-0.09);
+
+      const len = (0.55 + Math.random()*0.85) * Math.max(W,H);
+      const ang = (Math.random()*0.45 - 0.225) + (Math.PI*0.04);
       const dx = Math.cos(ang)*len;
       const dy = Math.sin(ang)*len;
 
-      const wob = (0.35 + Math.random()*0.9) * 28 * DPR;
+      const wob = (0.35 + Math.random()*0.9) * 22 * DPR;
 
       const x3 = x0 + dx;
       const y3 = y0 + dy;
@@ -159,11 +186,10 @@
       const x2 = x0 + dx*0.66 - wob*(Math.random()-0.5);
       const y2 = y0 + dy*0.66 - wob*(Math.random()-0.5);
 
-      const a = 0.010 + Math.random()*0.030;
-      const w = (0.5 + Math.random()*1.2)*DPR;
+      const a = 0.018 + Math.random()*0.030;
+      const w = (0.35 + Math.random()*0.9)*DPR;
 
-      // cool silk sheen tint
-      bgCtx.strokeStyle = `rgba(180,190,255,${a})`;
+      bgCtx.strokeStyle = `rgba(35,45,90,${a})`;
       bgCtx.lineWidth = w;
       bgCtx.beginPath();
       bgCtx.moveTo(x0,y0);
@@ -172,10 +198,23 @@
     }
     bgCtx.restore();
 
-    // vignette
-    const vg = bgCtx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.2, W/2,H/2, Math.max(W,H)*0.85);
-    vg.addColorStop(0, "rgba(0,0,0,0)");
-    vg.addColorStop(1, "rgba(0,0,0,0.55)");
+    // fine grain (frosted feel)
+    const grain = bgCtx.getImageData(0,0,W,H);
+    const d = grain.data;
+    for(let i=0;i<d.length;i+=4){
+      // tiny noise around white
+      const n = (Math.random()-0.5) * 10;
+      d[i]   = clamp(d[i]   + n, 0, 255);
+      d[i+1] = clamp(d[i+1] + n, 0, 255);
+      d[i+2] = clamp(d[i+2] + n, 0, 255);
+      // alpha ignored (opaque canvas)
+    }
+    bgCtx.putImageData(grain,0,0);
+
+    // gentle vignette (still bright)
+    const vg = bgCtx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.25, W/2,H/2, Math.max(W,H)*0.95);
+    vg.addColorStop(0, "rgba(255,255,255,0)");
+    vg.addColorStop(1, "rgba(40,60,120,0.08)");
     bgCtx.fillStyle = vg;
     bgCtx.fillRect(0,0,W,H);
   }
@@ -187,8 +226,6 @@
   async function initMic(){
     status("마이크 요청 중…");
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-    // iOS/Safari: 반드시 사용자 제스처 이후 resume
     await audioCtx.resume();
 
     stream = await navigator.mediaDevices.getUserMedia({
@@ -223,10 +260,8 @@
     osc = audioCtx.createOscillator();
     gainNode = audioCtx.createGain();
 
-    // 데모용: 말하는 느낌처럼 천천히 변하는 톤
     osc.type = "sine";
     osc.frequency.value = 160;
-
     gainNode.gain.value = 0.0;
 
     osc.connect(gainNode);
@@ -235,14 +270,13 @@
 
     osc.start();
 
-    // 자동으로 볼륨/주파수 움직임
     const t0 = audioCtx.currentTime;
     const pump = () => {
       if(!audioCtx) return;
       const t = audioCtx.currentTime - t0;
-      const env = 0.25 + 0.22*Math.max(0, Math.sin(t*1.4)) + 0.10*Math.max(0, Math.sin(t*2.7+1.2));
+      const env = 0.22 + 0.22*Math.max(0, Math.sin(t*1.35)) + 0.10*Math.max(0, Math.sin(t*2.6+1.2));
       gainNode.gain.setTargetAtTime(env, audioCtx.currentTime, 0.05);
-      const f = 140 + 80*(0.5+0.5*Math.sin(t*0.8)) + 50*(0.5+0.5*Math.sin(t*1.7+2.0));
+      const f = 140 + 90*(0.5+0.5*Math.sin(t*0.78)) + 60*(0.5+0.5*Math.sin(t*1.6+2.0));
       osc.frequency.setTargetAtTime(f, audioCtx.currentTime, 0.06);
       requestAnimationFrame(pump);
     };
@@ -252,11 +286,7 @@
   }
 
   function stopAudio(){
-    try{
-      if(stream){
-        stream.getTracks().forEach(t=>t.stop());
-      }
-    }catch(_){}
+    try{ if(stream) stream.getTracks().forEach(t=>t.stop()); }catch(_){}
     stream=null;
 
     try{ if(osc) osc.stop(); }catch(_){}
@@ -266,62 +296,58 @@
     audioCtx=null; analyser=null; source=null; gainNode=null; dataTime=null;
   }
 
-  function status(msg){
-    statusEl.textContent = msg;
-  }
+  function status(msg){ statusEl.textContent = msg; }
 
   // ---------- Wave model ----------
-  // “슬라이스” 단위로 색(hue)을 고정: 왼쪽에서 생성된 후 이동하면서 유지
+  // slices carry volume over time and travel left->right
   const slices = [];
   let lastTime = performance.now();
-  let hueTime = 0;
 
-  // quality/performance knobs
-  const speedPx = 520;           // 진행 속도(px/sec)
-  const baseWidth = 18;          // 리본 두께(기본)
-  const maxSlices = 900;         // 너무 많으면 폰에서 무거움
-  const spawnRate = 120;         // 초당 생성 슬라이스 수(많을수록 매끈)
+  // performance knobs (mobile friendly)
+  const speedPx = 520;         // wave travel speed
+  const maxSlices = 780;       // cap
+  const spawnRate = 140;       // smoothness
 
-  let smoothedVol = 0;           // RMS volume smoothing
-  let micReady = false;
+  let smoothedVol = 0;
+  let spawnAcc = 0;
 
-  // volume -> amplitude
   function computeVolumeRMS(){
     if(!analyser || !dataTime) return 0;
     analyser.getByteTimeDomainData(dataTime);
 
-    // time-domain RMS
     let sum = 0;
     for(let i=0;i<dataTime.length;i++){
-      const v = (dataTime[i] - 128) / 128; // [-1,1]
+      const v = (dataTime[i] - 128) / 128;
       sum += v*v;
     }
-    const rms = Math.sqrt(sum / dataTime.length);
-    return clamp(rms, 0, 1);
+    return clamp(Math.sqrt(sum / dataTime.length), 0, 1);
   }
 
-  // spawn slices at fixed cadence independent of fps
-  let spawnAcc = 0;
-
-  function addSlice(now, vol){
-    hueTime += 0.014; // hue drift speed
-    // “무지개지만 고급스럽게”: 과한 원색 피하려고 채도/명도는 렌더 단계에서 조절
-    const hue = (hueTime * 360) % 360;
-
-    // 각 슬라이스 고정 색
+  function addSlice(vol){
     slices.push({
       x: 0,
       vol,
-      hue,
       seed: Math.random()*10,
-      born: now
     });
-
-    // cap
     if(slices.length > maxSlices) slices.splice(0, slices.length - maxSlices);
   }
 
+  // ---------- Premium rainbow mapping (TOP red -> BOTTOM violet, fixed) ----------
+  // We create many strands; each strand has fixed "t" in [0..1] from top to bottom.
+  // Hue runs from 0 (red) to 270 (violet) so it passes orange/yellow/green/blue.
+  function strandColor(t, alpha){
+    const hue = 0 + 270*t;             // red -> violet
+    const sat = 82;                    // premium vivid but not neon
+    const light = lerp(58, 50, t);     // slightly darker towards violet
+    return `hsla(${hue.toFixed(1)}, ${sat}%, ${light.toFixed(1)}%, ${alpha})`;
+  }
+
   // ---------- Render ----------
+  // Fiber wave settings
+  const STRANDS = 56;                 // 촘촘한 얇은 선들
+  const BUNDLE_THICKNESS = 34;        // 전체 다발 두께(px @ DPR=1)
+  const BASE_LINE_W = 1.05;           // 개별 선 두께
+
   function draw(now){
     const dt = Math.min(0.05, (now - lastTime)/1000);
     lastTime = now;
@@ -331,108 +357,163 @@
 
     // update volume
     const vol = computeVolumeRMS();
-    // 부드럽게 따라가되 반응성 유지
     smoothedVol = lerp(smoothedVol, vol, 1 - Math.pow(0.001, dt));
 
-    // spawn slices
+    // spawn slices at cadence
     spawnAcc += dt * spawnRate;
     while(spawnAcc >= 1){
       spawnAcc -= 1;
-      addSlice(now, smoothedVol);
+      addSlice(smoothedVol);
     }
 
-    // move slices to the right
+    // move slices
     for(const s of slices){
       s.x += speedPx * DPR * dt;
-      // 약간의 “섬유 위를 미끄러지는” 느낌을 위해 볼륨도 살짝 감쇠
-      s.vol *= (1 - 0.15*dt);
+      s.vol *= (1 - 0.12*dt); // gentle decay
     }
-    // remove offscreen
     while(slices.length && slices[0].x > W + 60*DPR){
       slices.shift();
     }
 
-    // center line
     const midY = H * 0.52;
 
-    // wave shape parameters
-    const carrierSpeed = now*0.0012;
-    const spatial = 0.020 * DPR; // 파형 촘촘함
+    // wave shape
+    const tNow = now*0.0012;
+    const spatial = 0.020 * DPR;
+    const ampMax = H * 0.18;
 
-    // Build points along x using slices (each slice has fixed hue)
-    // Y = mid + envelope * sin(...)
-    // envelope from slice.vol
+    // points from slices
     const pts = [];
-    const ampMax = H * 0.18; // max amplitude
     for(const s of slices){
       const env = clamp(s.vol*2.4, 0.02, 1.0);
       const amp = env * ampMax;
 
-      // 실크처럼 “살짝 유기적인 흔들림”
-      const wob = smoothNoise(carrierSpeed + s.seed + s.x*0.002) * 0.28;
-      const phase = carrierSpeed*3.2 + s.seed*1.7 + s.x*spatial;
+      const wob = smoothNoise(tNow + s.seed + s.x*0.002) * 0.25;
+      const phase = tNow*3.0 + s.seed*1.5 + s.x*spatial;
       const y = midY + (Math.sin(phase) + wob) * amp;
 
-      pts.push({ x:s.x, y, hue:s.hue, env });
+      pts.push({ x:s.x, y, env, seed:s.seed });
     }
 
-    // Draw silk ribbon wave with 3 passes (base + color + highlight)
-    // Segment-by-segment coloring to keep “spawn-fixed” hue.
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
+    // draw fiber bundle wave (many thin strands)
+    drawFiberBundle(pts, now);
 
-    // Subtle glow
-    ctx.shadowBlur = 18 * DPR;
-    ctx.shadowColor = "rgba(120,150,255,0.12)";
-
-    // Pass 1: deep base
-    drawSegments(pts, (p)=>`hsla(${p.hue}, 70%, 35%, ${0.12 + 0.10*p.env})`, baseWidth*DPR);
-
-    // Pass 2: main color (premium rainbow gradient along time)
-    drawSegments(pts, (p)=>`hsla(${p.hue}, 78%, 55%, ${0.10 + 0.18*p.env})`, (baseWidth*0.62)*DPR);
-
-    // Pass 3: glossy highlight (screen blend)
-    ctx.shadowBlur = 26 * DPR;
-    ctx.shadowColor = "rgba(255,255,255,0.10)";
-    ctx.globalCompositeOperation = "screen";
-    drawSegments(pts, (p)=>`hsla(${p.hue}, 25%, 95%, ${0.08 + 0.10*p.env})`, (baseWidth*0.22)*DPR);
-
-    ctx.restore();
-
-    // extra: faint “fiber overlay” moving very slightly (gives silk-through feeling)
-    ctx.save();
-    ctx.globalAlpha = 0.06;
-    ctx.globalCompositeOperation = "screen";
-    const shift = (now*0.015) % (40*DPR);
-    ctx.drawImage(bgCanvas, -shift, 0);
-    ctx.drawImage(bgCanvas, W-shift, 0);
-    ctx.restore();
+    // moving glass sheen band (subtle)
+    drawSheenBand(now);
 
     requestAnimationFrame(draw);
   }
 
-  function drawSegments(points, colorFn, width){
-    if(points.length < 2) return;
+  function drawFiberBundle(points, now){
+    if(points.length < 3) return;
 
-    // performance: skip some segments on very large lists (mobile safety)
-    const step = points.length > 750 ? 2 : 1;
+    // speed-safe step
+    const step = points.length > 720 ? 2 : 1;
 
-    for(let i=step; i<points.length; i+=step){
-      const p0 = points[i-step];
-      const p1 = points[i];
-      // if gap too large (frame drops) skip
-      if(Math.abs(p1.x - p0.x) > 30*DPR) continue;
+    // bundle thickness (scale with DPR)
+    const thick = BUNDLE_THICKNESS * DPR;
 
-      ctx.strokeStyle = colorFn(p1);
-      // thickness can breathe a bit with env
-      ctx.lineWidth = width * (0.80 + 0.30*p1.env);
+    // This makes the bundle look like silk: strands are slightly curved/offset + varying opacity.
+    // Top strands = red, bottom = violet (fixed).
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    // faint shadow for depth (works on bright bg)
+    ctx.shadowBlur = 18 * DPR;
+    ctx.shadowColor = "rgba(10,18,40,0.12)";
+
+    // Base pass (depth)
+    for(let k=0;k<STRANDS;k++){
+      const t = k/(STRANDS-1);       // 0 top -> 1 bottom
+      const offset = (t-0.5)*thick;  // vertical offset
+      const alphaBase = 0.035 + 0.05*(1 - Math.abs(t-0.5)*1.2);
+
+      ctx.strokeStyle = strandColor(t, alphaBase);
+      ctx.lineWidth = BASE_LINE_W * DPR;
 
       ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
-      ctx.lineTo(p1.x, p1.y);
+      let started=false;
+
+      for(let i=step;i<points.length;i+=step){
+        const p0 = points[i-step];
+        const p1 = points[i];
+
+        // add micro “fiber flutter”
+        const flutter = smoothFlutter(now, p1.x, t) * (1.2*DPR);
+
+        const x0 = p0.x;
+        const y0 = p0.y + offset + flutter*(0.8 + 0.6*p0.env);
+        const x1 = p1.x;
+        const y1 = p1.y + offset + flutter*(0.8 + 0.6*p1.env);
+
+        if(!started){ ctx.moveTo(x0,y0); started=true; }
+        ctx.lineTo(x1,y1);
+      }
       ctx.stroke();
     }
+
+    // Highlight pass (silk gloss): center-ish strands get extra sheen
+    ctx.shadowBlur = 26 * DPR;
+    ctx.shadowColor = "rgba(255,255,255,0.25)";
+    ctx.globalCompositeOperation = "screen";
+
+    for(let k=0;k<STRANDS;k++){
+      const t = k/(STRANDS-1);
+      const offset = (t-0.5)*thick;
+
+      // highlight stronger near center with tiny bias upwards (looks premium)
+      const centerWeight = Math.exp(-Math.pow((t-0.47)/0.18, 2));
+      const alphaHi = 0.010 + 0.060*centerWeight;
+
+      ctx.strokeStyle = strandColor(t, alphaHi);
+      ctx.lineWidth = 0.8 * DPR;
+
+      ctx.beginPath();
+      let started=false;
+
+      for(let i=step;i<points.length;i+=step){
+        const p0 = points[i-step];
+        const p1 = points[i];
+
+        const flutter = smoothFlutter(now + 120, p1.x, t) * (1.0*DPR);
+
+        const x0 = p0.x;
+        const y0 = p0.y + offset + flutter*(0.9 + 0.7*p0.env);
+        const x1 = p1.x;
+        const y1 = p1.y + offset + flutter*(0.9 + 0.7*p1.env);
+
+        if(!started){ ctx.moveTo(x0,y0); started=true; }
+        ctx.lineTo(x1,y1);
+      }
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function smoothFlutter(now, x, t){
+    const tt = now*0.001;
+    return (
+      Math.sin(tt*2.2 + x*0.004 + t*3.8) * 0.55 +
+      Math.sin(tt*1.1 + x*0.006 + t*7.2 + 1.7) * 0.45
+    );
+  }
+
+  function drawSheenBand(now){
+    const tt = now*0.00012;
+    const cx = (0.15 + (tt % 1) * 0.85) * W;
+    const bandW = 0.22 * W;
+    const grad = ctx.createLinearGradient(cx-bandW, 0, cx+bandW, 0);
+    grad.addColorStop(0, "rgba(255,255,255,0)");
+    grad.addColorStop(0.5, "rgba(255,255,255,0.10)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,W,H);
+    ctx.restore();
   }
 
   // ---------- UI handlers ----------
@@ -441,7 +522,6 @@
       stopAudio();
       await initMic();
       ui.style.display = "none";
-      micReady = true;
     }catch(err){
       console.error(err);
       status("마이크 권한 실패 — 데모로 시도해보세요");
@@ -453,16 +533,13 @@
       stopAudio();
       await initDemo();
       ui.style.display = "none";
-      micReady = true;
     }catch(err){
       console.error(err);
       status("데모 실패 — 브라우저 호환을 확인하세요");
     }
   });
 
-  // start render loop immediately (even before audio)
   requestAnimationFrame(draw);
-
 })();
 </script>
 </body>

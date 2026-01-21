@@ -14,283 +14,400 @@
     errBox.textContent = String(msg);
   };
 
-  // -------------------------
-  // 1. Pixi 초기화 (v8 대응)
-  // -------------------------
+  window.addEventListener("error", (e) => showErr("JS Error:\n" + (e.error?.stack || e.message || e)));
+  window.addEventListener("unhandledrejection", (e) => showErr("Promise Error:\n" + (e.reason?.stack || e.reason)));
+
+  status("main.js 로드됨");
+
   if (!window.PIXI) {
-    showErr("PIXI 로드 실패");
+    showErr("PIXI 로드 실패: pixi.min.js가 로딩되지 않았습니다(CDN 차단/네트워크).");
+    status("PIXI 로드 실패");
     return;
   }
 
+  // -------------------------
+  // Pixi v8 safe init
+  // -------------------------
   let app;
   try {
     app = new PIXI.Application();
     await app.init({
       resizeTo: window,
-      backgroundAlpha: 0, // 배경 투명
+      backgroundAlpha: 0,
       antialias: true,
       autoDensity: true,
-      resolution: Math.min(2, window.devicePixelRatio || 1),
+      resolution: Math.min(1.5, window.devicePixelRatio || 1),
       powerPreference: "high-performance",
     });
-    stage.appendChild(app.canvas);
+
+    const canvas = app.renderer?.canvas || app.renderer?.view || null;
+    if (!canvas) throw new Error("Renderer canvas/view not found");
+    stage.appendChild(canvas);
   } catch (e) {
-    showErr("PIXI Init Error: " + e.message);
+    showErr("PIXI 초기화 실패:\n" + (e.stack || e));
+    status("PIXI 실패");
     return;
   }
 
-  const screen = new PIXI.Sprite(PIXI.Texture.EMPTY);
+  // full screen target
+  const screen = new PIXI.Sprite(PIXI.Texture.WHITE);
   screen.width = app.renderer.width;
   screen.height = app.renderer.height;
   app.stage.addChild(screen);
 
   // -------------------------
-  // 2. 데이터 텍스처 (Canvas 방식 - 호환성 해결)
+  // Audio RMS
   // -------------------------
-  // 오류가 났던 fromBuffer 대신, 1xN 캔버스를 만들어 텍스처로 씁니다.
-  const HISTORY_SIZE = 256; 
-  const dataCanvas = document.createElement("canvas");
-  dataCanvas.width = HISTORY_SIZE;
-  dataCanvas.height = 1;
-  const dataCtx = dataCanvas.getContext("2d", { willReadFrequently: true });
-  
-  // 픽셀 데이터 직접 조작을 위한 이미지 데이터
-  const imgData = dataCtx.createImageData(HISTORY_SIZE, 1);
-  const px = imgData.data; // [r, g, b, a, r, g, b, a, ...]
-
-  // 초기화 (투명)
-  for(let i=0; i<px.length; i++) px[i] = 0;
-  dataCtx.putImageData(imgData, 0, 0);
-
-  // 캔버스로부터 텍스처 생성
-  const ampTexture = PIXI.Texture.from(dataCanvas);
-
-  // -------------------------
-  // 3. 오디오 설정
-  // -------------------------
-  let audioCtx, analyser, dataArray;
+  let audioCtx = null, analyser = null, stream = null, data = null;
   let started = false;
   let paused = false;
-  
-  // 파동 데이터를 저장할 JS 배열 (값: 0 ~ 255)
-  const historyData = new Uint8Array(HISTORY_SIZE);
+  let smVol = 0;
 
-  async function startMic() {
+  const clamp = (x,a,b) => Math.max(a, Math.min(b, x));
+  const lerp = (a,b,t) => a + (b-a)*t;
+
+  async function startMic(){
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     await audioCtx.resume();
-    
-    const stream = await navigator.mediaDevices.getUserMedia({ 
-      audio: { 
-        echoCancellation: false, // 생생한 파동을 위해 false
-        autoGainControl: false, 
-        noiseSuppression: true 
-      } 
+
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation:true, noiseSuppression:true, autoGainControl:true }
     });
-    
+
     const src = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024; 
-    analyser.smoothingTimeConstant = 0.3; // 반응 속도
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.62;
     src.connect(analyser);
-    
-    dataArray = new Uint8Array(analyser.fftSize);
+
+    data = new Uint8Array(analyser.fftSize);
   }
 
-  function getVolume() {
-    if (!analyser) return 0;
-    analyser.getByteTimeDomainData(dataArray);
-    
+  function rms(){
+    if(!analyser || !data) return 0;
+    analyser.getByteTimeDomainData(data);
     let sum = 0;
-    for (let i = 0; i < dataArray.length; i++) {
-      const v = (dataArray[i] - 128) / 128;
-      sum += v * v;
+    for(let i=0;i<data.length;i++){
+      const v = (data[i]-128)/128;
+      sum += v*v;
     }
-    return Math.sqrt(sum / dataArray.length);
+    return clamp(Math.sqrt(sum/data.length), 0, 1);
   }
 
   // -------------------------
-  // 4. 셰이더 (가로형 실크 파동)
+  // Amp texture (1px canvas -> PIXI.Texture.from)
+  // ✅ fromBuffer 금지! (네 빌드에 없음)
+  // -------------------------
+  const COLS = 1024;
+
+  const ampCanvas = document.createElement("canvas");
+  ampCanvas.width = COLS;
+  ampCanvas.height = 1;
+  const ampCtx = ampCanvas.getContext("2d");
+
+  const img = ampCtx.createImageData(COLS, 1);
+  const px = img.data;
+  for(let i=0;i<COLS;i++){
+    px[i*4+0]=0; px[i*4+1]=0; px[i*4+2]=0; px[i*4+3]=255;
+  }
+  ampCtx.putImageData(img, 0, 0);
+
+  const ampTex = PIXI.Texture.from(ampCanvas);
+
+  function flushAmpTexture(){
+    ampCtx.putImageData(img, 0, 0);
+    ampTex.source.update(); // pixi v8 OK
+  }
+
+  // -------------------------
+  // "선이 선을 밀어서 전달" 전파 버퍼
+  // -------------------------
+  const ampF = new Float32Array(COLS);
+  const PUSH  = 0.92;   // 0.88~0.96
+  const DECAY = 0.985;  // 0.97~0.995
+  const RATE  = 180;    // 초당 전파 스텝
+
+  function propagateAmp(inputAmp01, steps){
+    for(let s=0; s<steps; s++){
+      for(let i=COLS-1; i>=1; i--){
+        ampF[i] = ampF[i] * DECAY + ampF[i-1] * PUSH;
+        if (ampF[i] > 1) ampF[i] = 1;
+        if (ampF[i] < 0) ampF[i] = 0;
+      }
+      ampF[0] = inputAmp01;
+    }
+  }
+
+  // 무음은 거의 안 보이고, 조금만 말해도 예민하게
+  function mapVolToAmp01(vRaw){
+    const SILENT = 0.002;
+    const KNEE   = 0.004;
+
+    const minAmp = 0.000;
+    const maxAmp = 0.78;
+
+    if (vRaw <= SILENT) return minAmp;
+
+    const x = clamp((vRaw - KNEE) / (1 - KNEE), 0, 1);
+
+    const gain  = 18.0;
+    const gamma = 0.18;
+
+    const y = Math.pow(clamp(x * gain, 0, 1), gamma);
+    return minAmp + y * (maxAmp - minAmp);
+  }
+
+  // -------------------------
+  // Silk shader
   // -------------------------
   const vertex = `
     in vec2 aPosition;
     out vec2 vTextureCoord;
+
+    uniform vec4 uInputSize;
     uniform vec4 uOutputFrame;
     uniform vec4 uOutputTexture;
 
-    void main() {
-      vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
-      position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
-      position.y = position.y * (2.0 * uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
-      gl_Position = vec4(position, 0.0, 1.0);
-      vTextureCoord = aPosition * (uOutputFrame.zw / uOutputTexture.xy);
+    vec4 filterVertexPosition( void )
+    {
+        vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+        position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+        position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+        return vec4(position, 0.0, 1.0);
+    }
+
+    vec2 filterTextureCoord( void )
+    {
+        return aPosition * (uOutputFrame.zw * uInputSize.zw);
+    }
+
+    void main(void)
+    {
+        gl_Position = filterVertexPosition();
+        vTextureCoord = filterTextureCoord();
     }
   `;
 
   const fragment = `
     precision highp float;
+
     in vec2 vTextureCoord;
 
-    uniform sampler2D uAmpTexture; // 소리 데이터 (1 x 256)
-    uniform float uTime;
+    uniform sampler2D uTexture;
+    uniform sampler2D uAmpTex;
 
-    // 랜덤 노이즈
-    float hash(float p) {
-      p = fract(p * .1031);
+    uniform vec2  uRes;
+    uniform float uCols;
+    uniform float uMidY;
+
+    float hash11(float p){
+      p = fract(p * 0.1031);
       p *= p + 33.33;
       p *= p + p;
       return fract(p);
     }
 
-    void main() {
-      vec2 uv = vTextureCoord;
-      
-      // [수정됨] 바코드가 아닌 '가로선'을 그리기 위해 로직 변경
-      
-      // 1. 소리 데이터 읽기 (uv.x 위치에 해당하는 과거 시점의 볼륨)
-      // uv.x가 0(왼쪽)이면 최신 데이터, 1(오른쪽)이면 과거 데이터 -> 파동이 오른쪽으로 진행
-      float amp = texture2D(uAmpTexture, vec2(uv.x, 0.5)).r; // Red 채널 값 (0~1)
-      
-      // 노이즈 게이트 (작은 소리 무시 -> 직선 유지)
-      if (amp < 0.05) amp = 0.0;
-      
-      // 2. 파동 변위 (Y축으로 흔들림)
-      // 사인파 Carrier에 소리 크기(Envelope)를 곱함
-      float wave = amp * 0.45 * sin(uv.x * 25.0 - uTime * 3.0);
-      
-      // 화면 중앙
-      float centerY = 0.5;
+    vec3 hsv2rgb(vec3 c){
+      vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
+      vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+      return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+    }
 
-      // 3. 가로 실크 가닥 그리기
-      vec3 finalColor = vec3(0.0);
-      float alphaSum = 0.0;
-      
-      // 5가닥의 가로 실을 겹쳐서 그림
-      for(float i = 0.0; i < 5.0; i++) {
-          // 가닥마다 미세하게 Y 위치 다르게 (실 뭉치)
-          float strandOffset = (hash(i * 12.3) - 0.5) * 0.04 * (1.0 + amp * 3.0);
-          
-          // 현재 픽셀(uv.y)이 이 실 가닥(centerY + wave + offset)과 얼마나 가까운지
-          // [중요] uv.x가 아니라 uv.y와의 거리를 계산해야 가로선이 됨
-          float targetY = centerY + wave + strandOffset;
-          float dist = abs(uv.y - targetY);
-          
-          // 두께 및 글로우
-          // 거리가 가까울수록 밝음
-          float glow = 0.0006 / max(dist, 0.0001);
-          glow = pow(glow, 1.3); // 선명하게
-          
-          // 색상: 무지개 (시간과 x위치에 따라 변함)
-          float hue = fract(uTime * 0.05 + uv.x * 0.3 + i * 0.1);
-          vec3 color = 0.5 + 0.5 * cos(6.28318 * (hue + vec3(0.0, 0.33, 0.67)));
-          
-          // 앞쪽(왼쪽)은 밝고 뒤로 갈수록 사라지게 (Trailing effect)
-          float fade = smoothstep(1.0, 0.2, uv.x); 
-          
-          finalColor += color * glow * fade;
-          alphaSum += glow;
+    float gauss(float x, float s){
+      return exp(-(x*x)/(2.0*s*s));
+    }
+
+    void main(){
+      vec2 uv = vTextureCoord;
+
+      // absolute rainbow: top red -> bottom violet
+      float hue = mix(0.0, 0.75, uv.y);
+
+      float cols = uCols;
+      float fx = uv.x * cols;
+      float col = floor(fx);
+      float inCol = fract(fx);
+
+      // ✅ 화면 x에 고정 샘플링(화면이 옆으로 흐르는 느낌 제거)
+      float s = (col + 0.5) / cols;
+      float amp = texture2D(uAmpTex, vec2(s, 0.5)).r;
+
+      // ✅ 밝은 배경에서도 보이게: 진폭 스케일+두께+알파 강화
+      float A = max(amp * 1.35, 0.0015);
+
+      float mid = uMidY;
+      float dy = abs(uv.y - mid);
+
+      float band = smoothstep(A, A - 0.012, dy);
+      float silentGate = smoothstep(0.002, 0.008, amp);
+
+      // ✅ 실(섬유) 결은 고정(시간 요동 없음)
+      float seed = hash11(col + 7.13);
+      float bendBase = (seed - 0.5) * 0.020;
+      float bendWave = sin((uv.y * 18.0) + seed * 6.283) * 0.010;
+      float bend = (bendBase + bendWave) * (0.25 + 1.2*A);
+
+      float x = (inCol - 0.5) + bend;
+
+      // 섬유 강화: 가닥 수↑, 코어 얇게, 하이라이트 날카롭게
+      float core = 0.0;
+      float halo = 0.0;
+      float spec = 0.0;
+
+      for(int k=0;k<6;k++){
+        float fk = float(k);
+        float off = (hash11(col*3.1 + fk*12.7) - 0.5) * 0.12;
+
+        float wCore = 0.032;
+        float wHalo = 0.095;
+
+        float d = x - off;
+
+        float c = gauss(d, wCore);
+        float h = gauss(d, wHalo);
+
+        float s1 = pow(clamp(1.0 - abs(d)/0.06, 0.0, 1.0), 18.0);
+        float streak = 0.62 + 0.38*sin(uv.y*76.0 + seed*9.0 + fk*4.0);
+        s1 *= mix(0.95, 1.35, streak);
+
+        core += c;
+        halo += h;
+        spec += s1;
       }
 
-      // 소리가 없으면 amp=0, wave=0 이 되어 일자 직선이 됨.
-      
-      // 과다 노출 방지 및 투명도 처리
-      gl_FragColor = vec4(finalColor, clamp(alphaSum * 0.8, 0.0, 1.0));
+      core = clamp(core, 0.0, 1.0);
+      halo = clamp(halo, 0.0, 1.0);
+      spec = clamp(spec, 0.0, 1.0);
+
+      // ✅ 더 선명/진하게
+      vec3 base = hsv2rgb(vec3(hue, 1.0, 1.0));
+      base = pow(base, vec3(0.60));
+      base *= 1.35;
+
+      vec3 ice  = vec3(0.90, 0.98, 1.00);
+      vec3 pink = vec3(1.00, 0.86, 0.98);
+
+      float alpha = band * (0.45 + 0.85 * silentGate);
+
+      vec3 colRGB = base * (0.72*core + 0.32*halo);
+      colRGB += ice  * (1.15 * spec);
+      colRGB += pink * (0.10 * halo);
+
+      float edge = smoothstep(0.62, 0.10, abs(inCol - 0.5));
+      colRGB *= (0.86 + 0.14*edge);
+
+      colRGB = clamp(colRGB, 0.0, 1.35);
+
+      float a = alpha * clamp(0.75*core + 0.45*halo + 0.85*spec, 0.0, 1.0);
+      a *= band;
+
+      gl_FragColor = vec4(colRGB, a);
     }
   `;
 
   let filter;
   try {
-    filter = new PIXI.Filter({
-      glProgram: new PIXI.GlProgram({ vertex, fragment }),
+    const glProgram = (PIXI.GlProgram?.from)
+      ? PIXI.GlProgram.from({ vertex, fragment })
+      : new PIXI.GlProgram({ vertex, fragment });
+
+    const makeFilter = (ampResource) => new PIXI.Filter({
+      glProgram,
       resources: {
-        uAmpTexture: ampTexture.source,
-        uniforms: {
-          uTime: { value: 0.0, type: 'f32' }
+        uAmpTex: ampResource,
+        silkUniforms: {
+          uRes:  { value: [app.renderer.width, app.renderer.height], type: "vec2<f32>" },
+          uCols: { value: COLS, type: "f32" },
+          uMidY: { value: 0.54, type: "f32" },
         }
       }
     });
+
+    try { filter = makeFilter(ampTex); }
+    catch { filter = makeFilter(ampTex.source); }
+
     screen.filters = [filter];
   } catch (e) {
-    showErr("Filter Error: " + e.message);
+    showErr("필터 생성 실패:\n" + (e.stack || e));
+    status("필터 실패");
+    return;
   }
 
-  // 리사이즈
-  window.addEventListener('resize', () => {
+  function onResize(){
     screen.width = app.renderer.width;
     screen.height = app.renderer.height;
+    const U = filter.resources.silkUniforms.uniforms;
+    U.uRes = [app.renderer.width, app.renderer.height];
+  }
+  window.addEventListener("resize", onResize, { passive:true });
+
+  // -------------------------
+  // Ticker
+  // -------------------------
+  let last = performance.now();
+
+  app.ticker.add(() => {
+    const now = performance.now();
+    const dt = Math.min(0.05, (now - last)/1000);
+    last = now;
+
+    if(!started){
+      pill.textContent = "Press Start";
+      return;
+    }
+    pill.textContent = paused ? "Paused · tap to resume" : "Running · tap to pause";
+    if(paused) return;
+
+    const v = rms();
+    smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
+
+    const U = filter.resources.silkUniforms.uniforms;
+    U.uCols = COLS;
+
+    const steps = Math.max(1, Math.floor(dt * RATE));
+    const amp01 = mapVolToAmp01(smVol);
+
+    propagateAmp(amp01, steps);
+
+    // ampF -> texture pixels
+    for(let i=0;i<COLS;i++){
+      const vv = Math.round(clamp(ampF[i], 0, 1) * 255);
+      px[i*4 + 0] = vv;
+      px[i*4 + 3] = 255;
+    }
+
+    flushAmpTexture();
   });
 
   // -------------------------
-  // 5. 애니메이션 루프
+  // Controls
   // -------------------------
-  let currentVol = 0;
-
-  app.ticker.add((ticker) => {
-    if (!started) {
-      pill.textContent = "Start 버튼을 눌러주세요";
-      return;
-    }
-    if (paused) {
-      pill.textContent = "Paused";
-      return;
-    }
-    pill.textContent = "Listening...";
-
-    // 1) 볼륨 측정 (Lerp로 부드럽게)
-    let targetVol = getVolume();
-    currentVol += (targetVol - currentVol) * 0.25;
-
-    // 2) 데이터 시프트 (오른쪽으로 밀기)
-    // [0, 1, 2] -> [?, 0, 1]
-    historyData.copyWithin(1, 0);
-
-    // 3) 최신 데이터 넣기 (왼쪽 끝)
-    // 시각화를 위해 값 증폭 (x 3.5)
-    let val = Math.min(255, currentVol * 255 * 3.5);
-    // 아주 작은 값은 0 처리 (직선 유지)
-    if (val < 5) val = 0;
-    
-    historyData[0] = val;
-
-    // 4) 캔버스/텍스처 업데이트
-    // 배열 데이터를 이미지 데이터(R채널)로 복사
-    for(let i=0; i<HISTORY_SIZE; i++){
-        // R 채널에 값 넣기 (px 구조: R, G, B, A)
-        px[i*4 + 0] = historyData[i]; 
-        px[i*4 + 1] = 0;
-        px[i*4 + 2] = 0;
-        px[i*4 + 3] = 255; // Alpha 100%
-    }
-    dataCtx.putImageData(imgData, 0, 0);
-    
-    // v8 방식: 소스 업데이트 알림
-    ampTexture.source.update();
-
-    // 5) 시간 전송
-    if (filter) {
-      filter.resources.uniforms.uniforms.uTime += ticker.deltaTime * 0.01;
-    }
-  });
-
-  // -------------------------
-  // UI
-  // -------------------------
-  async function doStart() {
-    if (started) return;
-    status("마이크 켜는 중...");
+  async function doStart(){
+    if(started) return;
+    status("마이크 시작 중…");
     try {
       await startMic();
       started = true;
-      ui.style.display = 'none';
-      status("Running");
+      paused = false;
+      ui.style.display = "none";
+      status("실행 중");
     } catch (e) {
-      showErr("마이크 권한 오류: " + e.message);
-      status("권한 없음");
+      showErr("마이크 실패:\n" + (e.stack || e));
+      status("마이크 실패: HTTPS/권한 확인");
     }
   }
 
-  btnStart.onclick = async () => { await doStart(); };
-  window.addEventListener('pointerdown', () => {
-    if(started) paused = !paused;
-  });
+  btnStart.onclick = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    status("Start 클릭됨");
+    await doStart();
+  };
+
+  window.addEventListener("pointerdown", () => {
+    if(!started) return;
+    if(ui.style.display !== "none") return;
+    paused = !paused;
+  }, { passive:true });
 
 })();

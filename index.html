@@ -3,83 +3,53 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Liquid Silk Voice</title>
+  <title>소리 시각화</title>
 
   <link rel="stylesheet" href="./bg.css" />
 
   <style>
-    html,body{margin:0;height:100%;overflow:hidden;}
+    html,body{margin:0;height:100%;overflow:hidden;touch-action:none;}
+    /* BG is in bg.css (#liquidBg), fixed and stays behind */
     #stage{position:fixed;inset:0;z-index:2;}
-
     #ui{
       position:fixed; inset:0; z-index:3;
       display:flex; align-items:center; justify-content:center;
       padding:24px;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      color:#0f1430;
-    }
-    .card{
-      width:min(560px, 92vw);
-      border-radius:22px;
-      padding:18px 16px 16px;
-      background: rgba(255,255,255,.55);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
-      border: 1px solid rgba(40,60,120,.14);
-      box-shadow: 0 18px 70px rgba(10,18,40,.14);
-      text-align:center;
-    }
-    .title{margin:0 0 8px;font-size:18px;font-weight:900;}
-    .desc{margin:0 0 14px;font-size:13px;line-height:1.5;color:rgba(10,18,40,.72);}
-    button{
-      border:0; cursor:pointer;
-      padding:12px 16px;border-radius:14px;
-      background: rgba(255,255,255,.76);
-      color:#0f1430; font-weight:900;
-      border: 1px solid rgba(40,60,120,.16);
-      box-shadow: 0 10px 26px rgba(10,18,40,.12);
-    }
-    button:active{transform: translateY(1px);}
-    .badge{
-      display:inline-block;margin-top:10px;
-      padding:6px 10px;border-radius:999px;
-      background: rgba(255,255,255,.66);
-      border:1px solid rgba(40,60,120,.14);
-      font-size:12px;color:rgba(10,18,40,.70);
-      user-select:none;
-    }
-
-    .pill{
-      position:fixed; left:12px; top:10px; z-index:4;
-      padding:8px 10px;border-radius:999px;
-      background: rgba(255,255,255,.66);
-      border: 1px solid rgba(40,60,120,.14);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      box-shadow: 0 8px 22px rgba(10,18,40,.12);
-      font:12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      color:rgba(10,18,40,.72);
-      user-select:none;
+      color:#ffffff;
       pointer-events:none;
     }
-
-    /* 화면에 에러를 띄우는 박스(콘솔 안 열어도 보이게) */
+    .panel{
+      width:min(520px, 92vw);
+      border-radius:18px;
+      padding:16px 16px 14px;
+      background:rgba(0,0,0,0.34);
+      border:1px solid rgba(255,255,255,0.14);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: 0 18px 60px rgba(0,0,0,0.35);
+      pointer-events:auto;
+      text-align:center;
+    }
+    .title{font-size:18px;font-weight:700;margin:0 0 12px;}
+    #btnStart{
+      appearance:none; border:1px solid rgba(255,255,255,0.18);
+      background:rgba(255,255,255,0.12);
+      color:#fff; font-weight:650;
+      padding:10px 14px; border-radius:14px;
+    }
     #err{
-      position:fixed; left:12px; right:12px; bottom:12px; z-index:999;
-      max-height:38vh; overflow:auto;
-      padding:10px 12px; border-radius:14px;
-      background: rgba(255,255,255,.85);
-      border: 1px solid rgba(255,90,90,.35);
-      backdrop-filter: blur(14px);
-      -webkit-backdrop-filter: blur(14px);
-      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-      color: rgba(120,20,20,.95);
-      display:none;
+      position:fixed; left:0; right:0; bottom:0;
+      padding:10px 14px;
+      color:#ffb3b3;
+      font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
       white-space:pre-wrap;
+      z-index:10;
+      pointer-events:none;
+      text-shadow:0 4px 16px rgba(0,0,0,0.6);
     }
   </style>
 </head>
-
 <body>
   <!-- Liquid glass background (fixed) -->
   <div id="liquidBg" aria-hidden="true"></div>
@@ -101,19 +71,14 @@
     </filter>
   </svg>
 
-  <div class="pill" id="pill">Start 후 화면 터치로 Pause/Resume</div>
-
+  <!-- WebGL canvas host -->
   <div id="stage"></div>
 
+  <!-- Start UI -->
   <div id="ui">
-    <div class="card">
-      <p class="title">Liquid Silk Voice</p>
-      <p class="desc">
-        Start로 마이크 허용 → 실크 섬유 파동이 왼→오 이동.<br/>
-        화면 터치(클릭)로 Pause/Resume 토글.
-      </p>
+    <div class="panel">
+      <h1 class="title">소리 시각화</h1>
       <button id="btnStart">Start</button>
-      <div class="badge" id="status">대기 중</div>
     </div>
   </div>
 

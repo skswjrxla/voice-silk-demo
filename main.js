@@ -297,19 +297,29 @@
     }
   `;
 
-  const filter = new PIXI.Filter({
+  let filter;
+try {
+  filter = new PIXI.Filter({
     glProgram: new PIXI.GlProgram({ vertex, fragment }),
     resources: {
-      uAmpTex: ampTex.source,
+      uAmpTex: ampTex,          // <-- 여기 중요
       silkUniforms: {
-        uRes:       { value: [app.renderer.width, app.renderer.height], type: 'vec2<f32>' },
-        uTime:      { value: 0.0, type: 'f32' },
-        uCols:      { value: COLS, type: 'f32' },
-        uHeadOffset:{ value: 0.0, type: 'f32' },
-        uMidY:      { value: 0.54, type: 'f32' },
+        uRes:        { value: [app.renderer.width, app.renderer.height], type: 'vec2<f32>' },
+        uTime:       { value: 0.0, type: 'f32' },
+        uCols:       { value: COLS, type: 'f32' },
+        uHeadOffset: { value: 0.0, type: 'f32' },
+        uMidY:       { value: 0.54, type: 'f32' },
       }
     }
   });
+
+  screen.filters = [filter];
+
+} catch (e) {
+  console.error(e);
+  status("렌더러/필터 에러(콘솔 확인)");
+}
+
 
   // Blend: add a bit of luminous feel
   screen.filters = [filter];
@@ -410,3 +420,4 @@
   }, { passive:true });
 
 })();
+

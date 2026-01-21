@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Silk Fiber Demo (Canvas)</title>
+  <style>
+    html, body { margin:0; height:100%; background:#0b0b10; overflow:hidden; }
+    canvas { display:block; width:100vw; height:100vh; }
+    .hint {
+      position:fixed; left:12px; bottom:10px; color:#cfcfe6;
+      font:12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      opacity:.8; user-select:none;
+    }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hint">드래그: 흐름 방향 변경 · 휠: 밀도 변경</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("c");
+  const ctx = canvas.getContext("2d", { alpha: false });
+
+  let W, H, DPR;
+  function resize() {
+    DPR = Math.min(2, window.devicePixelRatio || 1);
+    W = Math.floor(innerWidth * DPR);
+    H = Math.floor(innerHeight * DPR);
+    canvas.width = W; canvas.height = H;
+    canvas.style.width = innerWidth + "px";
+    canvas.style.height = innerHeight + "px";
+  }
+  addEventListener("resize", resize);
+  resize();
+
+  // ---- util
+  const rand = (a=1,b=0)=>Math.random()*(a-b)+b;
+  const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+
+  // Simple 1D smooth noise
+  function smoothNoise(t) {
+    // value noise via sin mixes (cheap)
+    return (
+      Math.sin(t*0.7) * 0.55 +
+      Math.sin(t*1.7+1.3) * 0.25 +
+      Math.sin(t*3.1+2.7) * 0.20
+    );
+  }
+
+  // ---- silk "sheet" settings
+  let fibers = [];
+  let density = 1400; // strand count (drag wheel to adjust)
+  let flow = { x: 1, y: 0.15 }; // base direction
+  let targetFlow = { x: 1, y: 0.15 };
+
+  function normalize(v){
+    const m = Math.hypot(v.x,v.y) || 1;
+    v.x/=m; v.y/=m;
+    return v;
+  }
+  normalize(flow); normalize(targetFlow);
+
+  function buildFibers() {
+    fibers.length = 0;
+    const count = Math.floor(density * (W*H)/(1100*700*DPR*DPR));
+    // build strands across a band that spans the screen
+    for (let i=0;i<count;i++){
+      const u = Math.random(); // position across perpendicular axis
+      const v = Math.random(); // along axis jitter seed
+      const len = rand(0.75, 0.35) * Math.max(W,H);
+      const w = rand(1.2, 0.35) * DPR;  // thickness
+      const alpha = rand(0.08, 0.015);  // base opacity
+      const curl = rand(0.8, 0.15);     // waviness
+      const gloss = rand(1.0, 0.4);     // highlight intensity
+      const hueShift = rand(20,-20);    // slight color variation
+      fibers.push({u,v,len,w,alpha,curl,gloss,hueShift});
+    }
+  }
+  buildFibers();
+
+  // Interaction: drag to change flow direction, wheel to change density
+  let dragging=false;
+  canvas.addEventListener("pointerdown", e=>{ dragging=true; canvas.setPointerCapture(e.pointerId); });
+  canvas.addEventListener("pointerup", ()=> dragging=false);
+  canvas.addEventListener("pointermove", e=>{
+    if(!dragging) return;
+    const cx = W/2, cy = H/2;
+    const x = (e.clientX*DPR - cx);
+    const y = (e.clientY*DPR - cy);
+    targetFlow.x = x; targetFlow.y = y;
+    normalize(targetFlow);
+  });
+  addEventListener("wheel", e=>{
+    e.preventDefault();
+    density = clamp(density + (e.deltaY>0?-120:120), 400, 4000);
+    buildFibers();
+  }, { passive:false });
+
+  // ---- render
+  let t0 = performance.now();
+  function frame(now){
+    const dt = Math.min(0.05, (now - t0)/1000);
+    t0 = now;
+
+    // ease flow
+    flow.x += (targetFlow.x - flow.x) * (1 - Math.pow(0.001, dt));
+    flow.y += (targetFlow.y - flow.y) * (1 - Math.pow(0.001, dt));
+    normalize(flow);
+
+    // background
+    ctx.fillStyle = "#0b0b10";
+    ctx.fillRect(0,0,W,H);
+
+    // define a coordinate basis: dir = flow, n = perpendicular
+    const dir = {x: flow.x, y: flow.y};
+    const nrm = {x: -dir.y, y: dir.x}; // perpendicular
+
+    // global soft glow pass
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+
+    // draw many thin bezier strands
+    for (let i=0;i<fibers.length;i++){
+      const f = fibers[i];
+
+      // Place strand center along perpendicular axis using u
+      const center = {
+        x: W/2 + nrm.x * ( (f.u-0.5) * (Math.min(W,H)*1.15) ),
+        y: H/2 + nrm.y * ( (f.u-0.5) * (Math.min(W,H)*1.15) )
+      };
+
+      // Start point along dir with some offset
+      const along = (f.v-0.5) * (Math.max(W,H)*0.25);
+      const x0 = center.x + dir.x * along;
+      const y0 = center.y + dir.y * along;
+
+      // End point
+      const x3 = x0 + dir.x * f.len;
+      const y3 = y0 + dir.y * f.len;
+
+      // Wavy controls (hair-like)
+      const phase = now*0.0007 + f.v*10;
+      const wob = f.curl * 22 * DPR;
+      const wob2 = f.curl * 10 * DPR;
+
+      const nx = nrm.x, ny = nrm.y;
+
+      const n1 = smoothNoise(phase + f.u*5) * wob;
+      const n2 = smoothNoise(phase*1.15 + 10 + f.u*7) * wob2;
+
+      const x1 = x0 + dir.x * (f.len*0.33) + nx * n1;
+      const y1 = y0 + dir.y * (f.len*0.33) + ny * n1;
+
+      const x2 = x0 + dir.x * (f.len*0.66) - nx * n2;
+      const y2 = y0 + dir.y * (f.len*0.66) - ny * n2;
+
+      // ---- Silk highlight: anisotropic "sheen" via gradient across normal direction
+      // gradient direction is perpendicular, so as strands align, you see a banded shine
+      const gx = center.x, gy = center.y;
+      const grad = ctx.createLinearGradient(
+        gx - nx*160*DPR, gy - ny*160*DPR,
+        gx + nx*160*DPR, gy + ny*160*DPR
+      );
+
+      // base silk color with slight hue shifts
+      // (keep subtle; too colorful becomes neon hair)
+      const baseR = 185 + f.hueShift*0.2;
+      const baseG = 190 + f.hueShift*0.1;
+      const baseB = 220 - f.hueShift*0.15;
+
+      // center highlight band
+      const shine = 0.65 + 0.35*Math.sin(phase + f.u*6);
+      const a0 = f.alpha;
+      const a1 = f.alpha * (0.75 + f.gloss*0.9) * shine;
+
+      grad.addColorStop(0.00, `rgba(${baseR|0},${baseG|0},${baseB|0},${a0})`);
+      grad.addColorStop(0.40, `rgba(255,255,255,${a1})`);
+      grad.addColorStop(0.50, `rgba(255,255,255,${a1*1.05})`);
+      grad.addColorStop(0.60, `rgba(${baseR|0},${baseG|0},${baseB|0},${a0})`);
+      grad.addColorStop(1.00, `rgba(${(baseR-30)|0},${(baseG-30)|0},${(baseB-20)|0},${a0*0.9})`);
+
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = f.w * (0.65 + 0.45*Math.abs(Math.sin(phase + f.u*4)));
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(x0,y0);
+      ctx.bezierCurveTo(x1,y1,x2,y2,x3,y3);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    // subtle vignette to feel "fabric"
+    const vg = ctx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.2, W/2,H/2, Math.max(W,H)*0.75);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.55)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0,0,W,H);
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

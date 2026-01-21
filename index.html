@@ -12,7 +12,7 @@
       position:fixed; inset:0;
       display:flex; align-items:center; justify-content:center;
       padding:24px;
-      background: radial-gradient(900px 520px at 50% 25%, rgba(255,255,255,.90), rgba(240,244,255,.55));
+      background: radial-gradient(900px 520px at 50% 25%, rgba(255,255,255,.92), rgba(235,242,255,.60));
       font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       color:#0f1430;
       z-index:10;
@@ -21,7 +21,7 @@
       width:min(560px, 92vw);
       border-radius:22px;
       padding:18px 16px 16px;
-      background: rgba(255,255,255,.58);
+      background: rgba(255,255,255,.62);
       backdrop-filter: blur(16px);
       -webkit-backdrop-filter: blur(16px);
       border: 1px solid rgba(40,60,120,.14);
@@ -33,7 +33,7 @@
     button{
       border:0; cursor:pointer;
       padding:12px 16px;border-radius:14px;
-      background: rgba(255,255,255,.72);
+      background: rgba(255,255,255,.76);
       color:#0f1430; font-weight:900;
       border: 1px solid rgba(40,60,120,.16);
       box-shadow: 0 10px 26px rgba(10,18,40,.12);
@@ -50,7 +50,7 @@
     .pill{
       position:fixed; left:12px; top:10px; z-index:11;
       padding:8px 10px;border-radius:999px;
-      background: rgba(255,255,255,.64);
+      background: rgba(255,255,255,.66);
       border: 1px solid rgba(40,60,120,.14);
       backdrop-filter: blur(14px);
       -webkit-backdrop-filter: blur(14px);
@@ -58,12 +58,13 @@
       font:12px/1.2 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
       color:rgba(10,18,40,.72);
       user-select:none;
+      pointer-events:none;
     }
 
     .err{
       position:fixed; left:12px; right:12px; bottom:12px; z-index:12;
       padding:10px 12px; border-radius:14px;
-      background: rgba(255,255,255,.78);
+      background: rgba(255,255,255,.82);
       border:1px solid rgba(255,90,90,.34);
       color:rgba(120,20,20,.90);
       font:12px/1.35 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
@@ -77,7 +78,7 @@
   </style>
 </head>
 <body>
-  <div class="pill" id="pill">Tap to start/stop (after Start)</div>
+  <div class="pill" id="pill">Start 후 화면 터치로 시작/멈춤</div>
   <canvas id="c"></canvas>
   <div class="err" id="err"></div>
 
@@ -85,14 +86,12 @@
     <div class="card">
       <p class="title">Glass Voice Columns</p>
       <p class="desc">
-        요동 없이, 세로 섬유 컬럼이 왼→오로 이동합니다.<br/>
-        길이만 음량에 비례해 변하고, “절대 높이” 기준으로 위=빨강 / 아래=보라 무지개가 나타납니다.<br/>
-        시작 후 화면을 터치하면 멈춤/재시작 토글됩니다.
+        요동(흔들림) 없이 “세로 섬유 컬럼”이 왼→오로 이동합니다.<br/>
+        조용하면 아무것도 안 보이고, 소리 크기에만 민감하게 반응합니다.<br/>
+        Start 후 화면 터치(클릭)로 멈춤/재시작 토글.
       </p>
       <button id="btnStart">Start</button>
-      <div class="desc" style="margin-top:10px;">
-        마이크는 HTTPS에서 동작합니다 (GitHub Pages OK).
-      </div>
+      <div class="desc" style="margin-top:10px;">마이크는 HTTPS에서 동작합니다 (GitHub Pages OK).</div>
       <div class="badge" id="status">대기 중</div>
     </div>
   </div>
@@ -117,13 +116,17 @@
 
   const status = (t)=>statusEl.textContent=t;
 
-  // ---------------- Perf knobs ----------------
+  // --------- PERF / SIZE ---------
   let DPR = 1;
   let W=0,H=0;
 
   // Background cache
   const bg = document.createElement("canvas");
   const bgx = bg.getContext("2d", { alpha:false });
+
+  // Caustics (premium overlay, cheap drawImage)
+  const caust = document.createElement("canvas");
+  const cax = caust.getContext("2d", { alpha:true });
 
   // Wave buffers (ping-pong)
   const waveA = document.createElement("canvas");
@@ -134,76 +137,20 @@
   let front = waveA, back = waveB;
   let frontCtx = wA, backCtx = wB;
 
-  // Audio
+  // --------- AUDIO ---------
   let audioCtx=null, analyser=null, source=null, stream=null;
   let dataTime=null;
 
-  // State
+  // --------- STATE ---------
   let hasStarted = false;
-  let running = false; // toggle by touch after start
+  let running = false;       // tap toggles this
+  let micReady = false;
 
   const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
   const lerp=(a,b,t)=>a+(b-a)*t;
 
-  // ---------------- Background (glass) ----------------
-  const noiseTile = document.createElement("canvas");
-  noiseTile.width = 96; noiseTile.height = 96;
-  const nt = noiseTile.getContext("2d", { alpha:true });
-  {
-    const img = nt.createImageData(96,96);
-    const d = img.data;
-    for(let i=0;i<d.length;i+=4){
-      const v = 245 + ((Math.random()*18)|0) - 9;
-      d[i]=v; d[i+1]=v; d[i+2]=v;
-      d[i+3]=14 + ((Math.random()*22)|0);
-    }
-    nt.putImageData(img,0,0);
-  }
-
-  function buildGlassBackground(){
-    const g = bgx.createLinearGradient(0,0,0,H);
-    g.addColorStop(0, "#ffffff");
-    g.addColorStop(0.45, "#f3f6ff");
-    g.addColorStop(1, "#edf2ff");
-    bgx.fillStyle = g;
-    bgx.fillRect(0,0,W,H);
-
-    for(let i=0;i<6;i++){
-      const cx = (0.12 + Math.random()*0.76)*W;
-      const cy = (0.12 + Math.random()*0.76)*H;
-      const r  = (0.12 + Math.random()*0.18)*Math.min(W,H);
-      const rg = bgx.createRadialGradient(cx,cy,r*0.15, cx,cy,r);
-      rg.addColorStop(0.00, "rgba(255,255,255,0.55)");
-      rg.addColorStop(0.30, "rgba(210,240,255,0.20)");
-      rg.addColorStop(0.55, "rgba(235,220,255,0.15)");
-      rg.addColorStop(0.75, "rgba(255,225,235,0.11)");
-      rg.addColorStop(1.00, "rgba(255,255,255,0.0)");
-      bgx.save();
-      bgx.globalCompositeOperation = "screen";
-      bgx.fillStyle = rg;
-      bgx.beginPath();
-      bgx.ellipse(cx,cy,r*1.15,r*0.78, Math.random()*Math.PI, 0, Math.PI*2);
-      bgx.fill();
-      bgx.restore();
-    }
-
-    const pat = bgx.createPattern(noiseTile, "repeat");
-    bgx.save();
-    bgx.globalCompositeOperation = "soft-light";
-    bgx.globalAlpha = 0.22;
-    bgx.fillStyle = pat;
-    bgx.fillRect(0,0,W,H);
-    bgx.restore();
-
-    const vg = bgx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35, W/2,H/2, Math.max(W,H)*0.98);
-    vg.addColorStop(0, "rgba(255,255,255,0)");
-    vg.addColorStop(1, "rgba(20,35,90,0.08)");
-    bgx.fillStyle = vg;
-    bgx.fillRect(0,0,W,H);
-  }
-
   function resize(){
-    DPR = Math.min(1.5, window.devicePixelRatio || 1);
+    DPR = Math.min(1.5, window.devicePixelRatio || 1); // 렉 방지
     W = Math.floor(innerWidth * DPR);
     H = Math.floor(innerHeight * DPR);
 
@@ -222,12 +169,156 @@
     frontCtx = wA; backCtx = wB;
 
     buildGlassBackground();
-    refreshGradients(); // because H changed / contexts might change
+    buildCausticsTexture();
+    refreshGradients(); // needs H/backCtx
   }
   addEventListener("resize", resize, { passive:true });
-  resize();
 
-  // ---------------- Audio ----------------
+  // --------- PREMIUM BACKGROUND (glass) ---------
+  const noiseTile = document.createElement("canvas");
+  noiseTile.width = 96; noiseTile.height = 96;
+  const nt = noiseTile.getContext("2d", { alpha:true });
+  {
+    const img = nt.createImageData(96,96);
+    const d = img.data;
+    for(let i=0;i<d.length;i+=4){
+      const v = 245 + ((Math.random()*18)|0) - 9;
+      d[i]=v; d[i+1]=v; d[i+2]=v;
+      d[i+3]=14 + ((Math.random()*22)|0);
+    }
+    nt.putImageData(img,0,0);
+  }
+
+  function buildGlassBackground(){
+    // mesh-like base
+    const g = bgx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0, "#ffffff");
+    g.addColorStop(0.45, "#f3f6ff");
+    g.addColorStop(1, "#edf2ff");
+    bgx.fillStyle = g;
+    bgx.fillRect(0,0,W,H);
+
+    // prismatic blobs
+    for(let i=0;i<7;i++){
+      const cx = (0.10 + Math.random()*0.80)*W;
+      const cy = (0.10 + Math.random()*0.80)*H;
+      const r  = (0.12 + Math.random()*0.22)*Math.min(W,H);
+      const rg = bgx.createRadialGradient(cx,cy,r*0.18, cx,cy,r);
+      rg.addColorStop(0.00, "rgba(255,255,255,0.62)");
+      rg.addColorStop(0.28, "rgba(195,235,255,0.22)");
+      rg.addColorStop(0.55, "rgba(235,215,255,0.18)");
+      rg.addColorStop(0.78, "rgba(255,225,235,0.14)");
+      rg.addColorStop(1.00, "rgba(255,255,255,0.0)");
+      bgx.save();
+      bgx.globalCompositeOperation = "screen";
+      bgx.fillStyle = rg;
+      bgx.beginPath();
+      bgx.ellipse(cx,cy,r*1.18,r*0.78, Math.random()*Math.PI, 0, Math.PI*2);
+      bgx.fill();
+      bgx.restore();
+    }
+
+    // subtle diagonal silk fibers (limited count for perf)
+    bgx.save();
+    bgx.globalCompositeOperation = "multiply";
+    bgx.lineCap = "round";
+    const fibers = Math.floor((W*H)/(26000*DPR));
+    for(let i=0;i<fibers;i++){
+      const x0 = (Math.random()*1.2-0.1)*W;
+      const y0 = (Math.random()*1.2-0.1)*H;
+      const len = (0.55 + Math.random()*0.75)*Math.max(W,H);
+      const ang = (Math.random()*0.18 - 0.09) + Math.PI*0.06;
+      const dx = Math.cos(ang)*len;
+      const dy = Math.sin(ang)*len;
+      const wob = (10 + Math.random()*18)*DPR;
+
+      const x3 = x0 + dx, y3 = y0 + dy;
+      const x1 = x0 + dx*0.33 + wob*(Math.random()-0.5);
+      const y1 = y0 + dy*0.33 + wob*(Math.random()-0.5);
+      const x2 = x0 + dx*0.66 - wob*(Math.random()-0.5);
+      const y2 = y0 + dy*0.66 - wob*(Math.random()-0.5);
+
+      bgx.strokeStyle = `rgba(40,60,120,${0.018 + Math.random()*0.020})`;
+      bgx.lineWidth = (0.5 + Math.random()*0.7)*DPR;
+      bgx.beginPath();
+      bgx.moveTo(x0,y0);
+      bgx.bezierCurveTo(x1,y1,x2,y2,x3,y3);
+      bgx.stroke();
+    }
+    bgx.restore();
+
+    // frosted grain
+    const pat = bgx.createPattern(noiseTile, "repeat");
+    bgx.save();
+    bgx.globalCompositeOperation = "soft-light";
+    bgx.globalAlpha = 0.22;
+    bgx.fillStyle = pat;
+    bgx.fillRect(0,0,W,H);
+    bgx.restore();
+
+    // soft vignette
+    const vg = bgx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35, W/2,H/2, Math.max(W,H)*0.98);
+    vg.addColorStop(0, "rgba(255,255,255,0)");
+    vg.addColorStop(1, "rgba(20,35,90,0.09)");
+    bgx.fillStyle = vg;
+    bgx.fillRect(0,0,W,H);
+  }
+
+  function buildCausticsTexture(){
+    // fixed-size texture
+    const S = 512;
+    caust.width = S; caust.height = S;
+    cax.clearRect(0,0,S,S);
+
+    // base translucent
+    cax.fillStyle = "rgba(255,255,255,0)";
+    cax.fillRect(0,0,S,S);
+
+    cax.save();
+    cax.globalCompositeOperation = "screen";
+    cax.lineCap = "round";
+
+    // draw a few curved “light bands”
+    for(let k=0;k<26;k++){
+      const y = (Math.random()*1.1 - 0.05)*S;
+      const amp = 12 + Math.random()*26;
+      const x0 = -S*0.1;
+      const x3 = S*1.1;
+
+      const x1 = S*(0.25 + Math.random()*0.15);
+      const x2 = S*(0.60 + Math.random()*0.15);
+
+      const y1 = y + (Math.random()-0.5)*amp;
+      const y2 = y + (Math.random()-0.5)*amp;
+
+      cax.strokeStyle = `rgba(255,255,255,${0.04 + Math.random()*0.08})`;
+      cax.lineWidth = 1.2 + Math.random()*2.2;
+
+      cax.beginPath();
+      cax.moveTo(x0, y);
+      cax.bezierCurveTo(x1,y1,x2,y2,x3, y + (Math.random()-0.5)*amp);
+      cax.stroke();
+    }
+
+    // subtle prismatic hints
+    for(let k=0;k<16;k++){
+      const cx = Math.random()*S, cy=Math.random()*S;
+      const r = 40 + Math.random()*90;
+      const rg = cax.createRadialGradient(cx,cy,r*0.15, cx,cy,r);
+      rg.addColorStop(0.0, "rgba(255,255,255,0.10)");
+      rg.addColorStop(0.4, "rgba(210,245,255,0.06)");
+      rg.addColorStop(0.7, "rgba(235,215,255,0.05)");
+      rg.addColorStop(1.0, "rgba(255,255,255,0)");
+      cax.fillStyle = rg;
+      cax.beginPath();
+      cax.arc(cx,cy,r,0,Math.PI*2);
+      cax.fill();
+    }
+
+    cax.restore();
+  }
+
+  // --------- AUDIO (RMS only) ---------
   async function startMic(){
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     await audioCtx.resume();
@@ -239,10 +330,11 @@
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
     analyser.fftSize = 1024;
-    analyser.smoothingTimeConstant = 0.85;
+    analyser.smoothingTimeConstant = 0.70; // 더 예민하게
     source.connect(analyser);
 
     dataTime = new Uint8Array(analyser.fftSize);
+    micReady = true;
   }
 
   function computeRMS(){
@@ -256,32 +348,35 @@
     return clamp(Math.sqrt(sum/dataTime.length), 0, 1);
   }
 
-  // ---------------- Columns (NO WOBBLE) ----------------
+  // --------- COLUMNS (NO WOBBLE) ---------
   const midYFactor = 0.54;
-  const speed = 420;      // px/sec (move)
-  const colW = 6;         // column width
-  const strands = 7;      // fibers inside column
+  const speed = 520;  // 더 “움직이는 파동” 느낌 (촘촘 컬럼)
+  const colW = 6;     // 촘촘함
+  const strands = 7;
 
-  // Absolute-height rainbow (red top, violet bottom)
+  // silence behavior
+  const SILENCE_THR = 0.020;     // 이 이하면 "아무것도 안 보이게"
+  const SILENCE_CLEAR = 0.14;    // 무음일 때 잔상 빠르게 지우기 (destination-out 알파)
+
+  // absolute height rainbow
   let baseGrad = null;
   let hiGrad = null;
 
   function rainbowGradientAbsolute(alpha){
     const g = backCtx.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0.00, `hsla(0,   100%, 52%, ${alpha})`);
-    g.addColorStop(0.16, `hsla(30,  100%, 52%, ${alpha})`);
-    g.addColorStop(0.33, `hsla(55,  100%, 50%, ${alpha})`);
-    g.addColorStop(0.50, `hsla(135, 100%, 46%, ${alpha})`);
-    g.addColorStop(0.66, `hsla(200, 100%, 52%, ${alpha})`);
-    g.addColorStop(0.82, `hsla(235, 100%, 56%, ${alpha})`);
-    g.addColorStop(1.00, `hsla(270, 100%, 52%, ${alpha})`);
+    g.addColorStop(0.00, `hsla(0,   100%, 48%, ${alpha})`);
+    g.addColorStop(0.16, `hsla(30,  100%, 50%, ${alpha})`);
+    g.addColorStop(0.33, `hsla(55,  100%, 48%, ${alpha})`);
+    g.addColorStop(0.50, `hsla(135, 100%, 44%, ${alpha})`);
+    g.addColorStop(0.66, `hsla(200, 100%, 50%, ${alpha})`);
+    g.addColorStop(0.82, `hsla(235, 100%, 54%, ${alpha})`);
+    g.addColorStop(1.00, `hsla(270, 100%, 48%, ${alpha})`);
     return g;
   }
 
   function refreshGradients(){
-    // Must be rebuilt when backCtx changes (swap) or on resize
     baseGrad = rainbowGradientAbsolute(1.00);
-    hiGrad   = rainbowGradientAbsolute(0.92);
+    hiGrad   = rainbowGradientAbsolute(0.95);
   }
 
   function swapBuffers(){
@@ -290,16 +385,20 @@
     refreshGradients();
   }
 
-  refreshGradients();
-
   function drawColumnAtX0(vol){
+    // NOTE: 무음이면 "아무것도 안 보이게"
+    if(vol < SILENCE_THR) return;
+
     const midY = H * midYFactor;
 
-    // louder response + tiny when silent
-    const vRaw = clamp(vol,0,1);
-    const v = Math.pow(vRaw, 0.45); // bigger response
-    const ampMax = H * 0.28;
-    const amp = (0.02 + v*0.98) * ampMax; // very small at silence
+    // 더 예민하게: 볼륨 부스트 + 감마
+    const vBoost = clamp(vol * 6.0, 0, 1);     // 민감도 핵심
+    const v = Math.pow(vBoost, 0.30);          // 더 크게 반응
+
+    const ampMax = H * 0.30;
+    const amp = v * ampMax;                   // 최소값 0 (무음이면 안 그림)
+
+    if(amp < 1.2 * DPR) return;               // 너무 작으면 아예 안 그림
 
     const y1 = midY - amp;
     const y2 = midY + amp;
@@ -307,22 +406,22 @@
     const widthPx = Math.max(1, Math.floor(colW * DPR));
     const spacing = strands <= 1 ? 0 : (widthPx / (strands-1));
 
-    // Base fibers (strong, crisp)
+    // base fibers (vivid + crisp)
     backCtx.save();
     backCtx.globalCompositeOperation = "source-over";
     backCtx.lineCap = "round";
-    backCtx.shadowBlur = 12 * DPR;
-    backCtx.shadowColor = "rgba(255,255,255,0.32)";
+    backCtx.shadowBlur = 14 * DPR;
+    backCtx.shadowColor = "rgba(255,255,255,0.34)";
 
     for(let i=0;i<strands;i++){
       const t = strands<=1 ? 0.5 : i/(strands-1);
       const dens = Math.exp(-Math.pow((t-0.5)/0.33, 2));
-      const a = 0.55 + 0.35*dens; // strong visibility
+      const a = 0.50 + 0.38*dens;
       const x = i * spacing;
 
       backCtx.globalAlpha = a;
       backCtx.strokeStyle = baseGrad;
-      backCtx.lineWidth = 1.0 * DPR;
+      backCtx.lineWidth = 1.05 * DPR;
       backCtx.beginPath();
       backCtx.moveTo(x, y1);
       backCtx.lineTo(x, y2);
@@ -330,160 +429,240 @@
     }
     backCtx.restore();
 
-    // Jewel / crystal highlight
+    // “4K jewel” highlight: multi-channel sparkle (cheap, but rich)
     backCtx.save();
     backCtx.globalCompositeOperation = "screen";
-    backCtx.shadowBlur = 26 * DPR;
-    backCtx.shadowColor = "rgba(255,255,255,0.65)";
+    backCtx.shadowBlur = 30 * DPR;
+    backCtx.shadowColor = "rgba(255,255,255,0.75)";
 
-    const cx = widthPx * 0.55;
+    const cx = widthPx * 0.56;
 
+    // main highlight
     backCtx.globalAlpha = 0.95;
     backCtx.strokeStyle = hiGrad;
-    backCtx.lineWidth = 0.95 * DPR;
+    backCtx.lineWidth = 1.0 * DPR;
     backCtx.beginPath();
     backCtx.moveTo(cx, y1);
     backCtx.lineTo(cx, y2);
     backCtx.stroke();
 
-    backCtx.globalAlpha = 0.38;
+    // crisp white spec
+    backCtx.globalAlpha = 0.42;
     backCtx.strokeStyle = "rgba(255,255,255,0.98)";
-    backCtx.lineWidth = 0.65 * DPR;
+    backCtx.lineWidth = 0.70 * DPR;
     backCtx.beginPath();
-    backCtx.moveTo(cx - 1.2*DPR, y1 + 1.2*DPR);
-    backCtx.lineTo(cx - 1.2*DPR, y2 - 1.2*DPR);
+    backCtx.moveTo(cx - 1.25*DPR, y1 + 1.4*DPR);
+    backCtx.lineTo(cx - 1.25*DPR, y2 - 1.4*DPR);
     backCtx.stroke();
 
-    // micro sparkle lines
-    backCtx.globalAlpha = 0.22;
-    backCtx.strokeStyle = "rgba(255,255,255,0.95)";
-    backCtx.lineWidth = 0.35 * DPR;
-    backCtx.beginPath();
-    backCtx.moveTo(cx + 0.9*DPR, y1 + 2.2*DPR);
-    backCtx.lineTo(cx + 0.9*DPR, y2 - 2.2*DPR);
-    backCtx.stroke();
-
-    backCtx.globalAlpha = 0.14;
+    // micro sparkles + slight chroma offsets
+    backCtx.globalAlpha = 0.18;
     backCtx.strokeStyle = "rgba(210,245,255,0.95)";
+    backCtx.lineWidth = 0.32 * DPR;
+    backCtx.beginPath();
+    backCtx.moveTo(cx + 1.9*DPR, y1 + 3.2*DPR);
+    backCtx.lineTo(cx + 1.9*DPR, y2 - 3.2*DPR);
+    backCtx.stroke();
+
+    backCtx.globalAlpha = 0.12;
+    backCtx.strokeStyle = "rgba(255,210,245,0.95)";
     backCtx.lineWidth = 0.30 * DPR;
     backCtx.beginPath();
-    backCtx.moveTo(cx + 2.0*DPR, y1 + 3.0*DPR);
-    backCtx.lineTo(cx + 2.0*DPR, y2 - 3.0*DPR);
+    backCtx.moveTo(cx + 2.8*DPR, y1 + 4.2*DPR);
+    backCtx.lineTo(cx + 2.8*DPR, y2 - 4.2*DPR);
     backCtx.stroke();
 
     backCtx.restore();
   }
 
-  // ---------------- Render loop (optimized shift) ----------------
+  // --------- LOOP (optimized shift) ---------
   let last = performance.now();
   let acc = 0;
   let smVol = 0;
+
+  function fadeFrontOut(amount){
+    // amount: 0..1 (bigger = faster vanish)
+    frontCtx.save();
+    frontCtx.globalCompositeOperation = "destination-out";
+    frontCtx.fillStyle = `rgba(0,0,0,${amount})`;
+    frontCtx.fillRect(0,0,W,H);
+    frontCtx.restore();
+  }
+
+  function drawGlassFrame(){
+    // subtle “premium panel” frame (cheap)
+    const pad = 18 * DPR;
+    const r = 26 * DPR;
+    const x = pad, y = pad, w = W - pad*2, h = H - pad*2;
+
+    ctx.save();
+    ctx.globalCompositeOperation = "screen";
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.lineWidth = 1.2 * DPR;
+
+    // rounded rect path
+    ctx.beginPath();
+    ctx.moveTo(x+r, y);
+    ctx.arcTo(x+w, y, x+w, y+h, r);
+    ctx.arcTo(x+w, y+h, x, y+h, r);
+    ctx.arcTo(x, y+h, x, y, r);
+    ctx.arcTo(x, y, x+w, y, r);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
 
   function frame(now){
     const dt = Math.min(0.05, (now-last)/1000);
     last = now;
 
-    // Always draw background
-    ctx.drawImage(bg, 0, 0);
+    // base background
+    ctx.drawImage(bg,0,0);
 
-    // Keep sampling audio so resume feels immediate
+    // premium caustics overlay (animated offset)
+    {
+      const t = now * 0.00003;
+      const ox = (Math.sin(t*2.0) * 90 + Math.cos(t*1.3) * 60) * DPR;
+      const oy = (Math.cos(t*1.7) * 80 + Math.sin(t*1.1) * 55) * DPR;
+
+      ctx.save();
+      ctx.globalCompositeOperation = "soft-light";
+      ctx.globalAlpha = 0.35;
+      // tile the caustics texture
+      const S = caust.width;
+      for(let yy = -S; yy < H + S; yy += S){
+        for(let xx = -S; xx < W + S; xx += S){
+          ctx.drawImage(caust, xx + ox, yy + oy);
+        }
+      }
+      ctx.restore();
+    }
+
+    // volume sampling even when paused (so resume feels instant)
     const v = computeRMS();
     smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
+    // IMPORTANT: tap-to-stop actually pauses movement + drawing
     if(running){
-      acc += speed * DPR * dt;
-      const stepPx = Math.max(1, Math.floor(colW * DPR));
-      const shifts = Math.floor(acc / stepPx);
+      // if silent => clear quickly to "nothing"
+      if(smVol < SILENCE_THR){
+        fadeFrontOut(SILENCE_CLEAR);
+      } else {
+        acc += speed * DPR * dt;
+        const stepPx = Math.max(1, Math.floor(colW * DPR));
+        const shifts = Math.floor(acc / stepPx);
 
-      if(shifts > 0){
-        acc -= shifts * stepPx;
+        if(shifts > 0){
+          acc -= shifts * stepPx;
 
-        // Shift front -> back (move right)
-        backCtx.setTransform(1,0,0,1,0,0);
-        backCtx.clearRect(0,0,W,H);
-        backCtx.drawImage(front, shifts*stepPx, 0);
+          // shift front -> back (move right)
+          backCtx.setTransform(1,0,0,1,0,0);
+          backCtx.clearRect(0,0,W,H);
+          backCtx.drawImage(front, shifts*stepPx, 0);
 
-        // Mild persistence (avoid over-bright accumulation)
-        backCtx.save();
-        backCtx.globalCompositeOperation = "destination-in";
-        backCtx.fillStyle = "rgba(255,255,255,0.995)";
-        backCtx.fillRect(0,0,W,H);
-        backCtx.restore();
-
-        // Draw new columns at left (x = i*stepPx)
-        for(let i=0;i<shifts;i++){
+          // mild persistence
           backCtx.save();
-          backCtx.translate(i*stepPx, 0);
-          drawColumnAtX0(smVol);
+          backCtx.globalCompositeOperation = "destination-in";
+          backCtx.fillStyle = "rgba(255,255,255,0.995)";
+          backCtx.fillRect(0,0,W,H);
           backCtx.restore();
-        }
 
-        swapBuffers();
+          // draw new columns at left
+          for(let i=0;i<shifts;i++){
+            backCtx.save();
+            backCtx.translate(i*stepPx, 0);
+            drawColumnAtX0(smVol);
+            backCtx.restore();
+          }
+
+          swapBuffers();
+        }
       }
     }
 
-    // Composite wave on top (visible on bright background)
+    // composite wave (visible on bright bg)
     ctx.save();
     ctx.globalCompositeOperation = "source-over";
     ctx.drawImage(front, 0, 0);
     ctx.restore();
 
-    // Subtle glass sheen sweep
-    const tt = (now*0.00014) % 1;
-    const cx = (0.1 + 0.9*tt)*W;
-    const w = 0.18*W;
-    const sg = ctx.createLinearGradient(cx-w,0,cx+w,0);
-    sg.addColorStop(0.00,"rgba(255,255,255,0)");
-    sg.addColorStop(0.50,"rgba(255,255,255,0.10)");
-    sg.addColorStop(1.00,"rgba(255,255,255,0)");
-    ctx.save();
-    ctx.globalCompositeOperation="screen";
-    ctx.fillStyle = sg;
-    ctx.fillRect(0,0,W,H);
-    ctx.restore();
+    // subtle sheen sweep
+    {
+      const tt = (now*0.00014) % 1;
+      const cx = (0.08 + 0.92*tt)*W;
+      const w = 0.20*W;
+      const sg = ctx.createLinearGradient(cx-w,0,cx+w,0);
+      sg.addColorStop(0.00,"rgba(255,255,255,0)");
+      sg.addColorStop(0.50,"rgba(255,255,255,0.12)");
+      sg.addColorStop(1.00,"rgba(255,255,255,0)");
+      ctx.save();
+      ctx.globalCompositeOperation="screen";
+      ctx.fillStyle = sg;
+      ctx.fillRect(0,0,W,H);
+      ctx.restore();
+    }
 
-    // UI pill text
+    drawGlassFrame();
+
+    // pill
     if(!hasStarted){
       pill.textContent = "Press Start";
+    }else if(!micReady){
+      pill.textContent = "Mic not ready";
     }else{
       pill.textContent = running ? "Running · tap to stop" : "Paused · tap to start";
     }
 
     requestAnimationFrame(frame);
   }
-  requestAnimationFrame(frame);
 
-  // ---------------- Controls ----------------
+  // --------- CONTROLS ---------
   async function doStart(){
     if(hasStarted) return;
+    hasStarted = true;
     status("마이크 시작 중…");
     try{
       await startMic();
-      hasStarted = true;
+      status("실행 중 (화면 터치로 멈춤/재시작)");
       running = true;
       ui.style.display = "none";
-      // small warm-up to avoid “first frame feels blank”
+      // warm-up
       requestAnimationFrame(()=>requestAnimationFrame(()=>{}));
     }catch(e){
       showErr(e);
       status("마이크 실패: HTTPS/권한 확인");
+      running = false;
     }
   }
 
   function toggleRun(){
     if(!hasStarted) return;
     running = !running;
+    // 멈췄을 때 “정지된 느낌” 명확히: 그대로 freeze (지우지 않음)
+    // 다시 시작하면 이어서 진행
   }
 
   // Start button
-  btnStart.addEventListener("click", doStart);
+  btnStart.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    doStart();
+  });
 
-  // Tap anywhere to toggle (after started)
+  // Tap anywhere to toggle AFTER started
+  // (UI가 보이는 동안은 토글 금지)
   window.addEventListener("pointerdown", (e) => {
-    // prevent toggling when UI is still visible (start screen)
-    if(ui.style.display !== "none") return;
+    if(!hasStarted) return;
+    if(ui.style.display !== "none") return; // start screen visible => ignore
+    // 버튼/링크 같은 UI 클릭 방지
+    if(e.target && (e.target.tagName === "BUTTON" || e.target.closest?.(".card"))) return;
     toggleRun();
   }, { passive:true });
+
+  // Start rendering
+  resize();
+  refreshGradients();
+  requestAnimationFrame(frame);
 
 })();
 </script>

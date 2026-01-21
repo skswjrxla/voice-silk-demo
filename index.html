@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>Glass Voice Wave</title>
+  <title>Glass Voice Columns</title>
   <style>
     html,body{margin:0;height:100%;overflow:hidden;background:#f3f6ff;}
     canvas{display:block;width:100vw;height:100vh;touch-action:manipulation;}
@@ -59,15 +59,15 @@
   </style>
 </head>
 <body>
-  <div class="hint">Mic only · 유리 배경 + 세로 스트랜드 파동 (최적화)</div>
+  <div class="hint">No wobble · Only moving vertical fibers (최적화)</div>
   <canvas id="c"></canvas>
 
   <div class="ui" id="ui">
     <div class="card">
-      <p class="title">Glass Voice Wave</p>
+      <p class="title">Glass Voice Columns</p>
       <p class="desc">
-        “이어진 선분” 없이, 세로 얇은 선들이 촘촘히 쌓여 파동처럼 보입니다.<br/>
-        색은 항상 위=빨강, 아래=보라 무지개 그라데이션(유리 톤)입니다.
+        요동(사인/노이즈) 없이, 세로 섬유 컬럼이 왼→오로 이동합니다.<br/>
+        컬럼 길이만 음량에 비례해 커지며, 위=빨강/아래=보라 무지개 그라데이션(선명)입니다.
       </p>
       <button id="btnMic">마이크 시작</button>
       <div class="desc" style="margin-top:10px;">
@@ -87,8 +87,7 @@
   const statusEl = document.getElementById("status");
   const status = (t)=>statusEl.textContent=t;
 
-  // --- perf knobs (중요)
-  // DPR 제한: 모바일/인앱에서 렉 방지 핵심
+  // ---------- perf knobs ----------
   let DPR = 1;
   let W=0,H=0;
 
@@ -96,7 +95,7 @@
   const bg = document.createElement("canvas");
   const bgx = bg.getContext("2d", { alpha:false });
 
-  // wave ping-pong (전체 재렌더 X, shift만)
+  // wave buffers (ping-pong)
   let waveA = document.createElement("canvas");
   let waveB = document.createElement("canvas");
   let wA = waveA.getContext("2d", { alpha:true });
@@ -110,7 +109,8 @@
   const lerp=(a,b,t)=>a+(b-a)*t;
 
   function resize(){
-    DPR = Math.min(1.5, window.devicePixelRatio || 1); // <-- 최적화 포인트
+    // 더 부드럽게(렉 방지): DPR cap
+    DPR = Math.min(1.5, window.devicePixelRatio || 1);
     W = Math.floor(innerWidth * DPR);
     H = Math.floor(innerHeight * DPR);
     canvas.width = W; canvas.height = H;
@@ -121,7 +121,6 @@
     waveA.width = W; waveA.height = H;
     waveB.width = W; waveB.height = H;
 
-    // clear wave buffers
     wA.clearRect(0,0,W,H);
     wB.clearRect(0,0,W,H);
 
@@ -130,9 +129,8 @@
   addEventListener("resize", resize, { passive:true });
   resize();
 
-  // ---- Background (유리 느낌, 매우 가벼움: per-pixel 루프 없음)
+  // ---------- background (light glass, cheap) ----------
   function buildGlassBackground(){
-    // base gradient
     const g = bgx.createLinearGradient(0,0,0,H);
     g.addColorStop(0, "#ffffff");
     g.addColorStop(0.45, "#f3f6ff");
@@ -140,16 +138,16 @@
     bgx.fillStyle = g;
     bgx.fillRect(0,0,W,H);
 
-    // prismatic blobs (몇 개만)
+    // prismatic blobs
     for(let i=0;i<6;i++){
       const cx = (0.12 + Math.random()*0.76)*W;
       const cy = (0.12 + Math.random()*0.76)*H;
       const r  = (0.12 + Math.random()*0.18)*Math.min(W,H);
       const rg = bgx.createRadialGradient(cx,cy,r*0.15, cx,cy,r);
-      rg.addColorStop(0.00, "rgba(255,255,255,0.60)");
-      rg.addColorStop(0.30, "rgba(210,240,255,0.22)");
-      rg.addColorStop(0.55, "rgba(235,220,255,0.16)");
-      rg.addColorStop(0.75, "rgba(255,225,235,0.12)");
+      rg.addColorStop(0.00, "rgba(255,255,255,0.55)");
+      rg.addColorStop(0.30, "rgba(210,240,255,0.20)");
+      rg.addColorStop(0.55, "rgba(235,220,255,0.15)");
+      rg.addColorStop(0.75, "rgba(255,225,235,0.11)");
       rg.addColorStop(1.00, "rgba(255,255,255,0.0)");
       bgx.save();
       bgx.globalCompositeOperation = "screen";
@@ -160,7 +158,7 @@
       bgx.restore();
     }
 
-    // frosted grain: 작은 타일 패턴 1회 생성 후 패턴 채우기 (가벼움)
+    // frosted grain tile
     const tile = document.createElement("canvas");
     tile.width = 96; tile.height = 96;
     const tctx = tile.getContext("2d", { alpha:true });
@@ -181,7 +179,6 @@
     bgx.fillRect(0,0,W,H);
     bgx.restore();
 
-    // subtle vignette (밝게 유지)
     const vg = bgx.createRadialGradient(W/2,H/2,Math.min(W,H)*0.35, W/2,H/2, Math.max(W,H)*0.98);
     vg.addColorStop(0, "rgba(255,255,255,0)");
     vg.addColorStop(1, "rgba(20,35,90,0.08)");
@@ -189,7 +186,7 @@
     bgx.fillRect(0,0,W,H);
   }
 
-  // ---- Audio: RMS volume only (가장 가벼움)
+  // ---------- audio (RMS only) ----------
   async function startMic(){
     status("마이크 요청 중…");
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -201,7 +198,7 @@
 
     source = audioCtx.createMediaStreamSource(stream);
     analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;              // 가볍게
+    analyser.fftSize = 1024;              // light
     analyser.smoothingTimeConstant = 0.85;
     source.connect(analyser);
 
@@ -220,60 +217,64 @@
     return clamp(Math.sqrt(sum/dataTime.length), 0, 1);
   }
 
-  // ---- Wave columns: 세로 스트랜드 컬럼만 (이어지는 선분 X)
-  // shift 방식: waveA를 waveB에 dx만큼 밀어넣고, x=0에 새 컬럼 찍기
-  const midFactor = 0.54;
-  const speed = 360;          // px/sec (DPR 포함 적용)
-  const colW = 6;             // 새 컬럼 폭(px @ DPR=1). 촘촘할수록 작게
-  const strandCount = 6;      // 컬럼 안에서 1px 스트랜드 몇 줄로 보일지
+  // ---------- columns model (NO WOBBLE) ----------
+  const midYFactor = 0.54;      // 고정 중심선
+  const speed = 420;            // px/sec (이동 속도)
+  const colW = 6;               // 컬럼 폭(작을수록 촘촘)
+  const strands = 7;            // 컬럼 안 세로섬유 개수(가벼우면서 선명)
 
-  // glassy rainbow gradient: 항상 위 red -> 아래 violet
-  // (HSL hue 0 -> 270)
-  function makeRainbowGradient(y1,y2, alpha=1){
+  // 더 진하고 선명한 유리 무지개 (위 red -> 아래 violet)
+  function rainbowGradient(y1,y2, alpha){
     const g = wB.createLinearGradient(0,y1,0,y2);
-    // 무지개 스펙트럼 고정
-    g.addColorStop(0.00, `hsla(0,   90%, 62%, ${alpha})`);   // red
-    g.addColorStop(0.16, `hsla(35,  92%, 62%, ${alpha})`);   // orange
-    g.addColorStop(0.33, `hsla(60,  90%, 62%, ${alpha})`);   // yellow
-    g.addColorStop(0.50, `hsla(135, 85%, 60%, ${alpha})`);   // green
-    g.addColorStop(0.66, `hsla(200, 88%, 62%, ${alpha})`);   // cyan/blue
-    g.addColorStop(0.82, `hsla(235, 88%, 62%, ${alpha})`);   // deep blue
-    g.addColorStop(1.00, `hsla(270, 88%, 62%, ${alpha})`);   // violet
+    // saturation/brightness up
+    g.addColorStop(0.00, `hsla(0,   100%, 58%, ${alpha})`);  // red
+    g.addColorStop(0.16, `hsla(30,  100%, 58%, ${alpha})`);  // orange
+    g.addColorStop(0.33, `hsla(55,  100%, 56%, ${alpha})`);  // yellow
+    g.addColorStop(0.50, `hsla(135, 95%, 54%, ${alpha})`);   // green
+    g.addColorStop(0.66, `hsla(200, 98%, 56%, ${alpha})`);   // cyan/blue
+    g.addColorStop(0.82, `hsla(235, 98%, 58%, ${alpha})`);   // blue
+    g.addColorStop(1.00, `hsla(270, 98%, 58%, ${alpha})`);   // violet
     return g;
   }
 
-  let last = performance.now();
-  let acc = 0;
-  let smVol = 0;
-
+  // “세로 섬유” 컬럼 한 개를 x=0에 그린다.
+  // 요동 없음: y1,y2는 오직 amp로만 결정.
   function drawColumn(vol){
-    const midY = H * midFactor;
-    const ampMax = H * 0.22;          // 최대 진폭
-    const amp = (0.02 + vol*1.05) * ampMax;
+    const midY = H * midYFactor;
+
+    // 볼륨 -> 길이 (원하는 반응성 위해 약간 곡선)
+    const v = Math.pow(clamp(vol,0,1), 0.65); // 작은 소리도 보이게
+    const ampMax = H * 0.28;
+    const amp = (0.03 + v*0.97) * ampMax;
 
     const y1 = midY - amp;
     const y2 = midY + amp;
 
-    // 컬럼 자체가 "유리"처럼 보이게: 컬럼 안 여러 스트랜드 + 하이라이트
-    const baseGrad = makeRainbowGradient(y1,y2, 0.58);
-    const hiGrad   = makeRainbowGradient(y1,y2, 0.30);
+    // base + highlight gradients (stronger)
+    const base = rainbowGradient(y1,y2, 0.85);
+    const hi   = rainbowGradient(y1,y2, 0.55);
 
-    // base pass
+    const widthPx = Math.max(1, Math.floor(colW * DPR));
+    const spacing = strands <= 1 ? 0 : (widthPx / (strands-1));
+
+    // base fibers
     wB.save();
     wB.globalCompositeOperation = "source-over";
     wB.lineCap = "round";
-    wB.shadowBlur = 10 * DPR;
-    wB.shadowColor = "rgba(255,255,255,0.22)";
+    wB.shadowBlur = 12 * DPR;
+    wB.shadowColor = "rgba(255,255,255,0.28)";
 
-    for(let s=0;s<strandCount;s++){
-      const t = strandCount<=1 ? 0.5 : s/(strandCount-1);
-      // 가운데가 더 밝게
-      const a = 0.10 + 0.18 * Math.exp(-Math.pow((t-0.5)/0.32,2));
-      const x = (s * (colW*DPR)/(strandCount-1 || 1));
+    for(let i=0;i<strands;i++){
+      const t = strands<=1 ? 0.5 : i/(strands-1);
+      // 가운데가 가장 진하게 (섬유 다발 느낌)
+      const dens = Math.exp(-Math.pow((t-0.5)/0.33, 2));
+      const a = 0.22 + 0.28*dens; // 더 진하게
+      const x = i * spacing;
 
       wB.globalAlpha = a;
-      wB.strokeStyle = baseGrad;
+      wB.strokeStyle = base;
       wB.lineWidth = 1.0 * DPR;
+
       wB.beginPath();
       wB.moveTo(x, y1);
       wB.lineTo(x, y2);
@@ -281,25 +282,25 @@
     }
     wB.restore();
 
-    // highlight pass (screen) : 유리 스펙
+    // glass spec highlight (screen)
     wB.save();
     wB.globalCompositeOperation = "screen";
-    wB.shadowBlur = 16 * DPR;
-    wB.shadowColor = "rgba(255,255,255,0.28)";
+    wB.shadowBlur = 18 * DPR;
+    wB.shadowColor = "rgba(255,255,255,0.40)";
 
-    // 중앙 하이라이트 1~2줄만
-    const cx = (colW*DPR) * 0.55;
-    wB.strokeStyle = hiGrad;
-    wB.globalAlpha = 0.55;
-    wB.lineWidth = 0.9 * DPR;
+    const cx = widthPx * 0.55;
+    wB.globalAlpha = 0.95;
+    wB.strokeStyle = hi;
+    wB.lineWidth = 0.95 * DPR;
     wB.beginPath();
     wB.moveTo(cx, y1);
     wB.lineTo(cx, y2);
     wB.stroke();
 
-    wB.strokeStyle = "rgba(255,255,255,0.38)";
-    wB.globalAlpha = 0.25;
-    wB.lineWidth = 0.7 * DPR;
+    // extra white spec line (strong + crisp)
+    wB.globalAlpha = 0.35;
+    wB.strokeStyle = "rgba(255,255,255,0.95)";
+    wB.lineWidth = 0.65 * DPR;
     wB.beginPath();
     wB.moveTo(cx - 1.2*DPR, y1 + 1.2*DPR);
     wB.lineTo(cx - 1.2*DPR, y2 - 1.2*DPR);
@@ -308,77 +309,66 @@
     wB.restore();
   }
 
-  function step(now){
+  // shift 방식 (최적화 핵심)
+  let last = performance.now();
+  let acc = 0;
+  let smVol = 0;
+
+  function frame(now){
     const dt = Math.min(0.05, (now-last)/1000);
     last = now;
 
-    // background draw
-    ctx.drawImage(bg, 0, 0);
+    // draw background once per frame
+    ctx.drawImage(bg,0,0);
 
-    // update volume (smoothing)
+    // volume smoothing (요동 X, 단지 길이 변화만 부드럽게)
     const v = computeRMS();
     smVol = lerp(smVol, v, 1 - Math.pow(0.001, dt));
 
-    // determine how many pixels to shift this frame
+    // move right by shifting the wave buffer
     acc += speed * DPR * dt;
 
-    // ping-pong shift in chunks of colW to keep columns crisp
     const stepPx = Math.max(1, Math.floor(colW * DPR));
     const shifts = Math.floor(acc / stepPx);
+
     if(shifts > 0){
       acc -= shifts * stepPx;
 
       // copy A -> B shifted right
-      // (B를 깨끗하게 만들고, A를 오른쪽으로 밀어넣기)
       wB.setTransform(1,0,0,1,0,0);
       wB.clearRect(0,0,W,H);
       wB.drawImage(waveA, shifts*stepPx, 0);
 
-      // 아주 약한 잔상 페이드 (과포화/번짐 방지)
+      // slight fade to avoid over-bright accumulation
       wB.save();
       wB.globalCompositeOperation = "destination-in";
       wB.fillStyle = "rgba(255,255,255,0.985)";
       wB.fillRect(0,0,W,H);
       wB.restore();
 
-      // draw new columns for each shift step
+      // draw N new columns at the left edge (x in [0..stepPx*(shifts-1)])
+      // IMPORTANT: still no “wobble”; only length changes.
       for(let i=0;i<shifts;i++){
-        // x=0에 새 컬럼 (세로 스트랜드 다발) 찍기
+        wB.save();
+        wB.translate(i*stepPx, 0);
         drawColumn(smVol);
-        // 다음 컬럼을 위해 이미지를 다시 stepPx만큼 더 밀지는 않음:
-        // shifts가 크면 여러 컬럼이 같은 x에 겹치므로, 약간 x오프셋으로 밀어줌
-        // -> 아주 싸게: 현재 B를 왼쪽으로 아주 약간 당겨서 다음 컬럼 공간 확보
-        if(i < shifts-1){
-          // B를 stepPx만큼 다시 오른쪽으로 밀어 "다음 컬럼 자리" 만들기
-          const tmp = waveA; waveA = waveB; waveB = tmp;
-          wA = waveA.getContext("2d", { alpha:true });
-          wB = waveB.getContext("2d", { alpha:true });
-
-          wB.clearRect(0,0,W,H);
-          wB.drawImage(waveA, stepPx, 0);
-
-          wB.save();
-          wB.globalCompositeOperation = "destination-in";
-          wB.fillStyle = "rgba(255,255,255,0.985)";
-          wB.fillRect(0,0,W,H);
-          wB.restore();
-        }
+        wB.restore();
       }
 
-      // swap buffers at end (B is newest)
+      // swap buffers
       const t = waveA; waveA = waveB; waveB = t;
       wA = waveA.getContext("2d", { alpha:true });
       wB = waveB.getContext("2d", { alpha:true });
     }
 
-    // composite wave over bg
+    // composite wave over background
     ctx.save();
     ctx.globalCompositeOperation = "screen";
     ctx.drawImage(waveA, 0, 0);
     ctx.restore();
 
-    // subtle moving glass sheen (cheap)
-    const tt = (now*0.00016) % 1;
+    // subtle sheen sweep (optional, cheap)
+    const tt = (now*0.00014) % 1;
     const cx = (0.1 + 0.9*tt)*W;
     const w = 0.18*W;
     const sg = ctx.createLinearGradient(cx-w,0,cx+w,0);
@@ -391,14 +381,14 @@
     ctx.fillRect(0,0,W,H);
     ctx.restore();
 
-    requestAnimationFrame(step);
+    requestAnimationFrame(frame);
   }
-  requestAnimationFrame(step);
+  requestAnimationFrame(frame);
 
-  // ---- UI
+  // UI
   btnMic.addEventListener("click", async () => {
     try{
-      status("버튼 클릭됨: 시작 중…");
+      status("마이크 시작 중…");
       await startMic();
       ui.style.display = "none";
     }catch(e){

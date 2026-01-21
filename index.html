@@ -224,18 +224,18 @@
   const strands = 7;            // 컬럼 안 세로섬유 개수(가벼우면서 선명)
 
   // 더 진하고 선명한 유리 무지개 (위 red -> 아래 violet)
-  function rainbowGradient(y1,y2, alpha){
-    const g = wB.createLinearGradient(0,y1,0,y2);
-    // saturation/brightness up
-    g.addColorStop(0.00, `hsla(0,   100%, 58%, ${alpha})`);  // red
-    g.addColorStop(0.16, `hsla(30,  100%, 58%, ${alpha})`);  // orange
-    g.addColorStop(0.33, `hsla(55,  100%, 56%, ${alpha})`);  // yellow
-    g.addColorStop(0.50, `hsla(135, 95%, 54%, ${alpha})`);   // green
-    g.addColorStop(0.66, `hsla(200, 98%, 56%, ${alpha})`);   // cyan/blue
-    g.addColorStop(0.82, `hsla(235, 98%, 58%, ${alpha})`);   // blue
-    g.addColorStop(1.00, `hsla(270, 98%, 58%, ${alpha})`);   // violet
-    return g;
-  }
+  function rainbowGradientAbsolute(alpha){
+  // 화면 전체 높이를 기준으로: 위쪽은 빨강, 아래쪽은 보라
+  const g = wB.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0.00, `hsla(0,   100%, 55%, ${alpha})`);  // red
+  g.addColorStop(0.16, `hsla(30,  100%, 55%, ${alpha})`);  // orange
+  g.addColorStop(0.33, `hsla(55,  100%, 54%, ${alpha})`);  // yellow
+  g.addColorStop(0.50, `hsla(135, 100%, 50%, ${alpha})`);  // green
+  g.addColorStop(0.66, `hsla(200, 100%, 55%, ${alpha})`);  // cyan/blue
+  g.addColorStop(0.82, `hsla(235, 100%, 58%, ${alpha})`);  // blue
+  g.addColorStop(1.00, `hsla(270, 100%, 55%, ${alpha})`);  // violet
+  return g;
+}
 
   // “세로 섬유” 컬럼 한 개를 x=0에 그린다.
   // 요동 없음: y1,y2는 오직 amp로만 결정.
@@ -243,16 +243,17 @@
     const midY = H * midYFactor;
 
     // 볼륨 -> 길이 (원하는 반응성 위해 약간 곡선)
-    const v = Math.pow(clamp(vol,0,1), 0.65); // 작은 소리도 보이게
+    const vRaw = clamp(vol,0,1);
+const v = Math.pow(vRaw, 0.50);   // 작은 소리도 더 크게 반응 (0.45~0.55 추천)
     const ampMax = H * 0.28;
-    const amp = (0.10 + v*0.90) * ampMax; // 최소 길이 확 올려서 항상 보이게
+    const amp = (0.02 + v*0.98) * ampMax;  // 무음이면 아주 작게
 
     const y1 = midY - amp;
     const y2 = midY + amp;
 
     // base + highlight gradients (stronger)
-    const base = rainbowGradient(y1,y2, 1.00); // 더 진하게
-const hi   = rainbowGradient(y1,y2, 0.85); // 하이라이트도 강하게
+    const base = rainbowGradientAbsolute(1.00);
+const hi   = rainbowGradientAbsolute(0.90);
 
     const widthPx = Math.max(1, Math.floor(colW * DPR));
     const spacing = strands <= 1 ? 0 : (widthPx / (strands-1));
@@ -285,8 +286,8 @@ const hi   = rainbowGradient(y1,y2, 0.85); // 하이라이트도 강하게
     // glass spec highlight (screen)
     wB.save();
     wB.globalCompositeOperation = "screen";
-    wB.shadowBlur = 18 * DPR;
-    wB.shadowColor = "rgba(255,255,255,0.40)";
+    wB.shadowBlur = 26 * DPR;
+wB.shadowColor = "rgba(255,255,255,0.65)";
 
     const cx = widthPx * 0.55;
     wB.globalAlpha = 0.95;
@@ -307,6 +308,23 @@ const hi   = rainbowGradient(y1,y2, 0.85); // 하이라이트도 강하게
     wB.stroke();
 
     wB.restore();
+
+    // micro sparkle lines (crystal feel)
+wB.globalAlpha = 0.22;
+wB.strokeStyle = "rgba(255,255,255,0.95)";
+wB.lineWidth = 0.35 * DPR;
+wB.beginPath();
+wB.moveTo(cx + 0.9*DPR, y1 + 2.2*DPR);
+wB.lineTo(cx + 0.9*DPR, y2 - 2.2*DPR);
+wB.stroke();
+
+wB.globalAlpha = 0.14;
+wB.strokeStyle = "rgba(210,245,255,0.95)"; // 아주 살짝 아이스 블루
+wB.lineWidth = 0.30 * DPR;
+wB.beginPath();
+wB.moveTo(cx + 2.0*DPR, y1 + 3.0*DPR);
+wB.lineTo(cx + 2.0*DPR, y2 - 3.0*DPR);
+wB.stroke();
   }
 
   // shift 방식 (최적화 핵심)
@@ -401,4 +419,5 @@ ctx.restore();
 </script>
 </body>
 </html>
+
 
